@@ -17,7 +17,7 @@ parser.add_argument("--restore", type=str, default='', required=True,
 parser.add_argument("--input", type=str, default='', required=True,
                     help="Directory and filename of the input data.")
 parser.add_argument("--output", type=str, default='output', required=True,
-                    help="Directory and filename of the outout data.")
+                    help="Directory and filename of the output data.")
 parser.add_argument("--channels", type=int, default=48,
                     help="Number of channels.")
 parser.add_argument("--num-samples", type=int, default=1,

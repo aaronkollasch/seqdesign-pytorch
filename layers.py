@@ -40,15 +40,12 @@ class Normalize(autograd.Function):
     @staticmethod
     def forward(ctx, x, dim):
         x_mu = x - x.mean(dim=dim, keepdim=True)
-        var = x_mu.pow(2).mean(dim=dim, keepdim=True)
-        inv_std = 1 / (var + Normalize.eps).sqrt()
-        del var
+        inv_std = 1 / (x_mu.pow(2).mean(dim=dim, keepdim=True) + Normalize.eps).sqrt()
+        x_norm = x_mu * inv_std
 
         if ctx is not None:
             ctx.save_for_backward(x_mu, inv_std)
             ctx.dim = dim
-
-        x_norm = x_mu * inv_std
         return x_norm
 
     @staticmethod
@@ -57,40 +54,18 @@ class Normalize(autograd.Function):
         dim = ctx.dim
         n = x_mu.size(dim)
 
-        # # derived from https://wiseodd.github.io/techblog/2016/07/04/batchnorm/
-        # go = grad_out * inv_std
-        # dvar = (grad_out * x_mu).sum(dim, keepdim=True) * -0.5 * inv_std ** 3
-        # dmu = - go.sum(dim, keepdim=True) + 2 * dvar * x_mu.mean(dim, keepdim=True)
-        # dx = go + 2 * dvar * x_mu / n + dmu / n
-
-        # simplified as in http://cthorey.github.io/backpropagation/
         dx = inv_std / n * (
                  grad_out * n -
                  grad_out.sum(dim, keepdim=True) -
                  (grad_out * x_mu).sum(dim, keepdim=True) * x_mu * inv_std ** 2
              )
-
         return dx, None
 
     @staticmethod
     def test():
         x = torch.DoubleTensor(3, 4, 2, 5).normal_(0, 1).requires_grad_()
         inputs = (x, 1)
-        test = autograd.gradcheck(Normalize.apply, inputs)
-        return test
-
-    @staticmethod
-    def test2():
-        x_in = torch.DoubleTensor(3, 4, 1, 5).normal_(0, 1).requires_grad_()
-        inputs = (x_in, 1)
-
-        Normalize.forward(None, *inputs).pow(2).mean().backward()
-        x1 = x_in.grad.clone()
-        x_in.grad.data.zero_()
-        Normalize.apply(*inputs).pow(2).mean().backward()
-        x2 = x_in.grad.clone()
-        # print(x2 / x1)
-        return torch.allclose(x1, x2)
+        return autograd.gradcheck(Normalize.apply, inputs)
 
 
 normalize = Normalize.apply
