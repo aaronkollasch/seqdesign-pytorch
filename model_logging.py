@@ -16,8 +16,8 @@ class Logger:
                  generate_function=None):
         self.trainer = trainer
         self.log_interval = log_interval
-        self.validation_interval = validation_interval
-        self.generate_interval = generate_interval
+        self.val_interval = validation_interval
+        self.gen_interval = generate_interval
         self.accumulated_loss = 0
         self.generate_function = generate_function
         if self.generate_function is not None:
@@ -29,9 +29,9 @@ class Logger:
         if current_step % self.log_interval == 0:
             self.log_loss(current_step)
             self.accumulated_loss = 0
-        if current_step % self.validation_interval == 0:
+        if self.val_interval is not None and self.val_interval > 0 and current_step % self.val_interval == 0:
             self.validate(current_step)
-        if current_step % self.generate_interval == 0:
+        if self.gen_interval is not None and self.gen_interval > 0 and current_step % self.gen_interval == 0:
             self.generate(current_step)
 
     def log_loss(self, current_step):
@@ -63,9 +63,12 @@ class TensorboardLogger(Logger):
                  generate_interval=500,
                  trainer=None,
                  generate_function=None,
-                 log_dir='logs'):
+                 log_dir='logs',
+                 log_param_histograms=False,
+                 ):
         super().__init__(log_interval, validation_interval, generate_interval, trainer, generate_function)
         self.writer = tf.summary.FileWriter(log_dir)
+        self.log_param_histograms = log_param_histograms
 
     def log(self, current_step, current_losses, current_grad_norm):
         super(TensorboardLogger, self).log(current_step, current_losses, current_grad_norm)
@@ -79,12 +82,12 @@ class TensorboardLogger(Logger):
         avg_loss = self.accumulated_loss / self.log_interval
         self.scalar_summary('avg loss', avg_loss, current_step)
 
-        # parameter histograms
-        for tag, value, in self.trainer.model.named_parameters():
-            tag = tag.replace('.', '/')
-            self.histo_summary(tag, value.data.cpu().numpy(), current_step)
-            if value.grad is not None:
-                self.histo_summary(tag + '/grad', value.grad.data.cpu().numpy(), current_step)
+        if self.log_param_histograms:
+            for tag, value, in self.trainer.model.named_parameters():
+                tag = tag.replace('.', '/')
+                self.histo_summary(tag, value.data.cpu().numpy(), current_step)
+                if value.grad is not None:
+                    self.histo_summary(tag + '/grad', value.grad.data.cpu().numpy(), current_step)
 
     def validate(self, current_step):
         avg_loss, avg_accuracy = self.trainer.validate()

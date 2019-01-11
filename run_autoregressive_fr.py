@@ -110,7 +110,7 @@ trainer = autoregressive_train.AutoregressiveTrainer(
     snapshot_interval=args.num_iterations // 10,
     snapshot_exec_template=sbatch_executable,
     device=device,
-    # logger=model_logging.Logger(validation_interval=100_000_000_000),
+    # logger=model_logging.Logger(validation_interval=None),
     logger=model_logging.TensorboardLogger(
         log_interval=500,
         validation_interval=1000,
