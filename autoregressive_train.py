@@ -76,7 +76,7 @@ class AutoregressiveTrainer:
         if continue_at_step is not None:
             self.current_step = continue_at_step
 
-        print('    step  step-t load-t   loss       CE-loss     l2-norm', flush=True)
+        print('    step  step-t load-t   loss       CE-loss    bitperchar   l2-norm', flush=True)
         for step in range(int(self.current_step), int(steps)):
             start = time.time()
 
@@ -100,6 +100,7 @@ class AutoregressiveTrainer:
             loss = losses['loss']
             ce_loss = losses['ce_loss']
             kl_loss = losses['kl_embedding_loss']
+            bitperchar = losses['bitperchar']
 
             self.optimizer.zero_grad()
             loss.backward()
@@ -115,8 +116,9 @@ class AutoregressiveTrainer:
                     any(torch.isnan(param.grad).any() for param in self.model.parameters())
             ):
                 print("nan detected:")
-                print("{: 8d} {:6.3f} {:5.4f} {:11.6f} {:11.6f} {:10.6f}".format(
-                    step, time.time() - start, data_load_time, loss.detach(), ce_loss.detach(), kl_loss.detach()))
+                print("{: 8d} {:6.3f} {:5.4f} {:11.6f} {:11.6f} {:11.8f} {:10.6f}".format(
+                    step, time.time() - start, data_load_time,
+                    loss.detach(), ce_loss.detach(), bitperchar.detach(), kl_loss.detach()))
                 print('grad norm', total_norm)
                 print('params', [name for name, param in self.model.named_parameters() if torch.isnan(param).any()])
                 print('grads', [name for name, param in self.model.named_parameters() if torch.isnan(param.grad).any()])
@@ -133,9 +135,9 @@ class AutoregressiveTrainer:
                 self.save_state()
 
             self.logger.log(step, losses, total_norm)
-            print("{: 8d} {:6.3f} {:5.4f} {:11.6f} {:11.6f} {:10.6f}".format(
-                step, time.time()-start, data_load_time, loss.detach(), ce_loss.detach(), kl_loss.detach()),
-                flush=True)
+            print("{: 8d} {:6.3f} {:5.4f} {:11.6f} {:11.6f} {:11.8f} {:10.6f}".format(
+                step, time.time()-start, data_load_time,
+                loss.detach(), ce_loss.detach(), bitperchar.detach(), kl_loss.detach()), flush=True)
 
     def validate(self, batch_size=48):
         return 0.0, 0.0
