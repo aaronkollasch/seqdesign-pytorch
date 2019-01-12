@@ -49,9 +49,9 @@ class Autoregressive(nn.Module):
                 "num_dilation_blocks": 6,
                 "num_layers": 9,
                 "dilation_schedule": None,
-                "transformer": False,
+                "transformer": False,  # TODO transformer
                 "inverse_temperature": False,
-                "dropout_type": "inter",  # options = "final","inter","gaussian"
+                "dropout_type": "inter",  # options = "final", "inter", "gaussian"  # TODO what is gaussian?
                 "dropout_p": 0.5,  # probability of zeroing out value
                 "config": "original",  # options = "original", "standard"
             },

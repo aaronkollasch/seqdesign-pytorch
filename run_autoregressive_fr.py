@@ -32,7 +32,7 @@ parser.add_argument("--no-cuda", action='store_true',
 args = parser.parse_args()
 
 run_name = f"{args.dataset}_elu_channels-{args.channels}_rseed-{args.r_seed}" \
-    f"_start-{time.strftime('%Y-%m-%d_%H-%M-%S', time.gmtime())}"
+    f"_start-{time.strftime('%y%b%d_%H%M', time.localtime())}"
 
 sbatch_executable = f"""#!/bin/bash
 #SBATCH -c 4                               # Request one core

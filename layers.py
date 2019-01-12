@@ -98,8 +98,6 @@ class LayerChannelNorm(nn.Module):
             nn.init.normal_(self.bias, mean=self.bias_init, std=1e-6)
 
     def forward(self, x):
-        # mean, var = moments(x, self.dim, keepdim=True)
-        # h = (x - mean) / (var + self.eps).sqrt()
         h = normalize(x, self.dim)
 
         if self.affine:
