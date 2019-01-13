@@ -10,10 +10,14 @@ class TFReader:
     def __init__(self, filepath):
         self.filepath = filepath
         self.reader = pywrap_tensorflow.NewCheckpointReader(filepath)
+        self.unused_keys = []
+        self.reset_keys()
+
+    def reset_keys(self):
         self.unused_keys = list(self.reader.get_variable_to_shape_map().keys())
+        self.unused_keys = [key for key in self.unused_keys if not key.startswith("Backprop")]
 
     def load_autoregressive_fr(self, model):
-        self.unused_keys = list(self.reader.get_variable_to_shape_map().keys())
         for m, m_name in zip([model.model['model_f'], model.model['model_r']],
                              ['Forward/', 'Reverse/']):
             self.load_autoregressive(m, m_name)
@@ -38,6 +42,8 @@ class TFReader:
                 self.load_conv2d(layer.mix_conv_3, layer_name + f'Mix3{i_layer}/')
 
         self.load_conv2d(model.end_conv, model_name + 'WriteSequence/conv2D/')
+
+        model.step = self.reader.get_tensor('global_step')
 
     def load_conv2d(self, layer, layer_name):
         self.set_parameter(layer.bias, layer_name + 'b')

@@ -124,6 +124,8 @@ class Autoregressive(nn.Module):
             activation=None,
         )
 
+        self.step = 0
+
     @staticmethod
     def _nonlinearity(nonlin_type):
         if nonlin_type == "elu":
@@ -182,14 +184,13 @@ class Autoregressive(nn.Module):
         return up_val_1d
 
     def calculate_loss(
-            self, seq_logits, target_seqs, mask, n_eff, step=0,
+            self, seq_logits, target_seqs, mask, n_eff
     ):
         """
 
         :param seq_logits: (N, C, 1, L)
         :param target_seqs: (N, C, 1, L) as one-hot
         :param mask: (N, 1, 1, L)
-        :param step:
         :param n_eff:
         :return:
         """
@@ -230,7 +231,7 @@ class Autoregressive(nn.Module):
                 kl_logits_loss = kl_logits_per_seq.mean()
                 kl_loss += kl_logits_loss
                 kl_embedding_loss = kl_logits_loss
-                loss = loss + self._anneal_embedding(step) * kl_logits_loss
+                loss = loss + self._anneal_embedding(self.step) * kl_logits_loss
             else:
                 kl_embedding_loss = kl_weight_loss
 
@@ -269,6 +270,15 @@ class AutoregressiveFR(nn.Module):
         self.dims = self.model['model_f'].dims
         self.hyperparams = self.model['model_f'].hyperparams
 
+    @property
+    def step(self):
+        return self.model['model_f'].step
+
+    @step.setter
+    def step(self, new_step):
+        self.model['model_f'].step = new_step
+        self.model['model_r'].step = new_step
+
     def weight_costs(self):
         return tuple(cost for model in self.model.children() for cost in model.weight_costs())
 
@@ -283,14 +293,13 @@ class AutoregressiveFR(nn.Module):
     def calculate_loss(
             self,
             seq_logits_f, target_seqs_f, mask_f, n_eff_f,
-            seq_logits_r, target_seqs_r, mask_r, n_eff_r,
-            step=0,
+            seq_logits_r, target_seqs_r, mask_r, n_eff_r
     ):
         losses_f = self.model['model_f'].calculate_loss(
-            seq_logits_f, target_seqs_f, mask_f, n_eff_f, step
+            seq_logits_f, target_seqs_f, mask_f, n_eff_f
         )
         losses_r = self.model['model_r'].calculate_loss(
-            seq_logits_r, target_seqs_r, mask_r, n_eff_r, step
+            seq_logits_r, target_seqs_r, mask_r, n_eff_r
         )
 
         losses_comb = {}

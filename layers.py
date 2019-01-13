@@ -54,6 +54,8 @@ class Normalize(autograd.Function):
         dim = ctx.dim
         n = x_mu.size(dim)
 
+        # adapted from: https://cthorey.github.io/backpropagation/
+        #               https://wiseodd.github.io/techblog/2016/07/04/batchnorm/
         dx = inv_std / n * (
                  grad_out * n -
                  grad_out.sum(dim, keepdim=True) -

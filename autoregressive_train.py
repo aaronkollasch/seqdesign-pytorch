@@ -91,11 +91,11 @@ class AutoregressiveTrainer:
                     batch['prot_decoder_input_r'], batch['prot_mask_decoder'])
                 losses = self.model.calculate_loss(
                     output_logits_f, batch['prot_decoder_output'], batch['prot_mask_decoder'], n_eff,
-                    output_logits_r, batch['prot_decoder_output_r'], batch['prot_mask_decoder'], n_eff, step)
+                    output_logits_r, batch['prot_decoder_output_r'], batch['prot_mask_decoder'], n_eff)
             else:
                 output_logits_f = self.model(batch['prot_decoder_input'], batch['prot_mask_decoder'])
                 losses = self.model.calculate_loss(
-                    output_logits_f, batch['prot_decoder_output'], batch['prot_mask_decoder'], n_eff, step)
+                    output_logits_f, batch['prot_decoder_output'], batch['prot_mask_decoder'], n_eff)
 
             loss = losses['loss']
             ce_loss = losses['ce_loss']
@@ -127,6 +127,7 @@ class AutoregressiveTrainer:
 
             self.optimizer.step()
             step += 1
+            self.model.step = step
             self.current_step = step
 
             if step % self.params['snapshot_interval'] == 0:
@@ -263,4 +264,5 @@ class AutoregressiveTrainer:
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.current_step = checkpoint['step']
+        self.model.step = checkpoint['step']
         self.params.update(checkpoint['train_params'])
