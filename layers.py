@@ -2,73 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
-import torch.autograd as autograd
+
+from functions import normalize, l2_norm_except_dim
 
 
 class HyperparameterError(Exception):
     pass
-
-
-def l2_normalize(w, dim, eps=1e-12):
-    """PyTorch implementation of tf.nn.l2_normalize
-    """
-    return w / w.pow(2).sum(dim, keepdim=True).clamp(min=eps).sqrt()
-
-
-def l2_norm_except_dim(w, dim, eps=1e-12):
-    norm_dims = [i for i, _ in enumerate(w.shape)]
-    del norm_dims[dim]
-    return l2_normalize(w, norm_dims, eps)
-
-
-def moments(x, dim, keepdim=False):
-    """PyTorch implementation of tf.nn.moments over a single dimension
-    """
-    # n = x.numel() / torch.prod(torch.tensor(x.shape)[dim])  # useful for multiple dims
-    mean = x.mean(dim=dim, keepdim=True)
-    variance = (x - mean.detach()).pow(2).mean(dim=dim, keepdim=keepdim)
-    if not keepdim:
-        mean = mean.squeeze(dim)
-    return mean, variance
-
-
-class Normalize(autograd.Function):
-    """Normalize x across dim
-    """
-    @staticmethod
-    def forward(ctx, x, dim, eps=1e-5):
-        x_mu = x - x.mean(dim=dim, keepdim=True)
-        inv_std = 1 / (x_mu.pow(2).mean(dim=dim, keepdim=True) + eps).sqrt()
-        x_norm = x_mu * inv_std
-
-        if ctx is not None:
-            ctx.save_for_backward(x_mu, inv_std)
-            ctx.dim = dim
-        return x_norm
-
-    @staticmethod
-    def backward(ctx, grad_out):
-        x_mu, inv_std = ctx.saved_tensors
-        dim = ctx.dim
-        n = x_mu.size(dim)
-
-        # adapted from: https://cthorey.github.io/backpropagation/
-        #               https://wiseodd.github.io/techblog/2016/07/04/batchnorm/
-        dx = inv_std / n * (
-                 grad_out * n -
-                 grad_out.sum(dim, keepdim=True) -
-                 (grad_out * x_mu).sum(dim, keepdim=True) * x_mu * inv_std ** 2
-             )
-        return dx, None, None
-
-    @staticmethod
-    def test():
-        x = torch.DoubleTensor(3, 4, 2, 5).normal_(0, 1).requires_grad_()
-        inputs = (x, 1)
-        return autograd.gradcheck(Normalize.apply, inputs)
-
-
-normalize = Normalize.apply
 
 
 class LayerChannelNorm(nn.Module):

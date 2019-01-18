@@ -1,4 +1,5 @@
-import numpy as np
+import math
+
 import torch
 import torch.nn as nn
 import torch.distributions as dist
@@ -6,18 +7,7 @@ import torch.nn.functional as F
 
 import layers
 from utils import recursive_update
-
-
-def comb_losses(losses_f, losses_r):
-    losses_comb = {}
-    for key in losses_f.keys():
-        if 'per_seq' in key:
-            losses_comb[key] = torch.stack([losses_f[key], losses_r[key]])
-        else:
-            losses_comb[key] = losses_f[key] + losses_r[key]
-            losses_comb[key + '_f'] = losses_f[key]
-            losses_comb[key + '_r'] = losses_r[key]
-    return losses_comb
+from functions import nonlinearity, comb_losses
 
 
 class Autoregressive(nn.Module):
@@ -91,7 +81,7 @@ class Autoregressive(nn.Module):
 
         # build encoder
         enc_params = self.hyperparams['encoder']
-        nonlin = self._nonlinearity(enc_params['nonlinearity'])
+        nonlin = nonlinearity(enc_params['nonlinearity'])
 
         self.start_conv = layers.Conv2d(
             self.dims['alphabet'],
@@ -130,15 +120,6 @@ class Autoregressive(nn.Module):
         self.image_summaries = {}
 
     @staticmethod
-    def _nonlinearity(nonlin_type):
-        if nonlin_type == "elu":
-            return F.elu
-        elif nonlin_type == "relu":
-            return F.relu
-        elif nonlin_type == "lrelu":
-            return F.leaky_relu
-
-    @staticmethod
     def _log_gaussian(z, prior_mu, prior_sigma):
         prior = dist.Normal(prior_mu, prior_sigma)
         return prior.log_prob(z)
@@ -149,7 +130,7 @@ class Autoregressive(nn.Module):
     ):
         gauss_one = self._log_gaussian(z, mu_one, sigma_one)
         gauss_two = self._log_gaussian(z, mu_two, sigma_two)
-        entropy = 0.5 * torch.log(2.0 * np.pi * np.e * torch.exp(2. * log_sigma))
+        entropy = 0.5 * torch.log(2.0 * math.pi * math.e * torch.exp(2. * log_sigma))
         return (p * gauss_one) + ((1. - p) * gauss_two) + entropy
 
     def _mle_mixture_gaussians(
@@ -168,7 +149,7 @@ class Autoregressive(nn.Module):
         )
 
     def parameter_count(self):
-        return sum(np.prod(param.shape) for param in self.parameters())
+        return sum(param.numel() for param in self.parameters())
 
     def forward(self, inputs, input_masks):
         """
@@ -290,29 +271,30 @@ class AutoregressiveFR(nn.Module):
             **kwargs
     ):
         super(AutoregressiveFR, self).__init__()
-        self.model = nn.ModuleDict()
-        self.model['model_f'] = self.sub_model_class(**kwargs)
-        self.model['model_r'] = self.sub_model_class(**kwargs)
-        self.dims = self.model['model_f'].dims
-        self.hyperparams = self.model['model_f'].hyperparams
+        self.model = nn.ModuleDict({
+            'model_f': self.sub_model_class(**kwargs),
+            'model_r': self.sub_model_class(**kwargs)
+        })
+        self.dims = self.model.model_f.dims
+        self.hyperparams = self.model.model_f.hyperparams
 
-        # make dictionaries the same
-        self.model['model_r'].dims = self.model['model_f'].dims
-        self.model['model_r'].hyperparams = self.model['model_f'].hyperparams
+        # make dictionaries the same in memory
+        self.model.model_r.dims = self.model.model_f.dims
+        self.model.model_r.hyperparams = self.model.model_f.hyperparams
 
     @property
     def step(self):
-        return self.model['model_f'].step
+        return self.model.model_f.step
 
     @step.setter
     def step(self, new_step):
-        self.model['model_f'].step = new_step
-        self.model['model_r'].step = new_step
+        self.model.model_f.step = new_step
+        self.model.model_r.step = new_step
 
     @property
     def image_summaries(self):
-        img_summaries_f = self.model['model_f'].image_summaries
-        img_summaries_r = self.model['model_r'].image_summaries
+        img_summaries_f = self.model.model_f.image_summaries
+        img_summaries_r = self.model.model_r.image_summaries
         img_summaries = {}
         for key in img_summaries_f.keys():
             img_summaries[key + '_f'] = img_summaries_f[key]
@@ -326,8 +308,8 @@ class AutoregressiveFR(nn.Module):
         return sum(model.parameter_count() for model in self.model.children())
 
     def forward(self, input_f, mask_f, input_r, mask_r):
-        output_logits_f = self.model['model_f'](input_f, mask_f)
-        output_logits_r = self.model['model_r'](input_r, mask_r)
+        output_logits_f = self.model.model_f(input_f, mask_f)
+        output_logits_r = self.model.model_r(input_r, mask_r)
         return output_logits_f, output_logits_r
 
     def reconstruction_loss(
@@ -335,10 +317,10 @@ class AutoregressiveFR(nn.Module):
             seq_logits_f, target_seqs_f, mask_f,
             seq_logits_r, target_seqs_r, mask_r,
     ):
-        losses_f = self.model['model_f'].reconstruction_loss(
+        losses_f = self.model.model_f.reconstruction_loss(
             seq_logits_f, target_seqs_f, mask_f
         )
-        losses_r = self.model['model_r'].reconstruction_loss(
+        losses_r = self.model.model_r.reconstruction_loss(
             seq_logits_r, target_seqs_r, mask_r
         )
         return comb_losses(losses_f, losses_r)
@@ -348,10 +330,10 @@ class AutoregressiveFR(nn.Module):
             seq_logits_f, target_seqs_f, mask_f, n_eff_f,
             seq_logits_r, target_seqs_r, mask_r, n_eff_r
     ):
-        losses_f = self.model['model_f'].calculate_loss(
+        losses_f = self.model.model_f.calculate_loss(
             seq_logits_f, target_seqs_f, mask_f, n_eff_f
         )
-        losses_r = self.model['model_r'].calculate_loss(
+        losses_r = self.model.model_r.calculate_loss(
             seq_logits_r, target_seqs_r, mask_r, n_eff_r
         )
         return comb_losses(losses_f, losses_r)
@@ -443,7 +425,7 @@ class AutoregressiveVAE(nn.Module):
 
         # initialize encoder
         enc_params = self.hyperparams['encoder']
-        nonlin = self._nonlinearity(enc_params['nonlinearity'])
+        nonlin = nonlinearity(enc_params['nonlinearity'])
 
         self.encoder = nn.ModuleDict()
         self.encoder.start_conv = layers.Conv2d(
@@ -473,7 +455,7 @@ class AutoregressiveVAE(nn.Module):
 
         # initialize decoder
         dec_params = self.hyperparams['decoder']
-        nonlin = self._nonlinearity(dec_params['nonlinearity'])
+        nonlin = nonlinearity(dec_params['nonlinearity'])
 
         if dec_params['positional_embedding']:
             max_len = dec_params['pos_emb_max_len']
@@ -548,15 +530,6 @@ class AutoregressiveVAE(nn.Module):
                     p.grad.zero_()
 
     @staticmethod
-    def _nonlinearity(nonlin_type):
-        if nonlin_type == "elu":
-            return F.elu
-        elif nonlin_type == "relu":
-            return F.relu
-        elif nonlin_type == "lrelu":
-            return F.leaky_relu
-
-    @staticmethod
     def _kl_standard_normal(mu, log_sigma):
         """ KL divergence between two Diagonal Gaussians """
         return -0.5 * (1.0 + 2.0 * log_sigma - mu.pow(2) - (2.0 * log_sigma).exp())
@@ -572,7 +545,7 @@ class AutoregressiveVAE(nn.Module):
     ):
         gauss_one = self._log_gaussian(z, mu_one, sigma_one)
         gauss_two = self._log_gaussian(z, mu_two, sigma_two)
-        entropy = 0.5 * torch.log(2.0 * np.pi * np.e * torch.exp(2. * log_sigma))
+        entropy = 0.5 * torch.log(2.0 * math.pi * math.e * torch.exp(2. * log_sigma))
         return (p * gauss_one) + ((1. - p) * gauss_two) + entropy
 
     def _mle_mixture_gaussians(
@@ -587,9 +560,9 @@ class AutoregressiveVAE(nn.Module):
         warm_up = self.hyperparams["sampler_hyperparams"]["warm_up"]
         annealing_type = self.hyperparams["sampler_hyperparams"]["annealing_type"]
         if annealing_type == "linear":
-            return np.minimum(step / warm_up, 1.)
+            return min(step / warm_up, 1.)
         elif annealing_type == "piecewise_linear":
-            return np.minimum(torch.sigmoid(torch.tensor(step-warm_up).float()).item() * ((step-warm_up)/warm_up), 1.)
+            return min(torch.sigmoid(torch.tensor(step-warm_up).float()).item() * ((step-warm_up)/warm_up), 1.)
         elif annealing_type == "sigmoid":
             slope = self.hyperparams["sampler_hyperparams"]["sigmoid_slope"]
             return torch.sigmoid(torch.tensor(slope * (step - warm_up))).item()
@@ -598,9 +571,9 @@ class AutoregressiveVAE(nn.Module):
         warm_up = self.hyperparams["embedding_hyperparams"]["warm_up"]
         annealing_type = self.hyperparams["embedding_hyperparams"]["annealing_type"]
         if annealing_type == "linear":
-            return np.minimum(step / warm_up, 1.)
+            return min(step / warm_up, 1.)
         elif annealing_type == "piecewise_linear":
-            return np.minimum(torch.sigmoid(torch.tensor(step-warm_up).float()).item() * ((step-warm_up)/warm_up), 1.)
+            return min(torch.sigmoid(torch.tensor(step-warm_up).float()).item() * ((step-warm_up)/warm_up), 1.)
         elif annealing_type == "sigmoid":
             slope = self.hyperparams["embedding_hyperparams"]["sigmoid_slope"]
             return torch.sigmoid(torch.tensor(slope * (step-warm_up))).item()
@@ -618,7 +591,7 @@ class AutoregressiveVAE(nn.Module):
         )
 
     def parameter_count(self):
-        return sum(np.prod(param.shape) for param in self.parameters())
+        return sum(param.numel() for param in self.parameters())
 
     def forward(self, inputs, input_masks):
         """
@@ -633,7 +606,7 @@ class AutoregressiveVAE(nn.Module):
         for convnet in self.encoder.dilation_blocks:
             up_val_1d = convnet(up_val_1d, input_masks)
 
-        nonlin = self._nonlinearity(enc_params['embedding_nnet_nonlinearity'])
+        nonlin = nonlinearity(enc_params['embedding_nnet_nonlinearity'])
         up_val_1d = up_val_1d * input_masks
         up_val_mu_logsigma_2d = up_val_1d.sum(dim=[2, 3]) / input_masks.sum(dim=[2, 3])
 

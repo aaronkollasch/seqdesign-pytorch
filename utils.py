@@ -4,6 +4,8 @@ import subprocess
 import glob
 import collections
 
+import torch
+
 
 def recursive_update(orig_dict, update_dict):
     """Update the contents of orig_dict with update_dict"""
@@ -13,6 +15,18 @@ def recursive_update(orig_dict, update_dict):
         else:
             orig_dict[key] = val
     return orig_dict
+
+
+def comb_losses(losses_f, losses_r):
+    losses_comb = {}
+    for key in losses_f.keys():
+        if 'per_seq' in key:
+            losses_comb[key] = torch.stack([losses_f[key], losses_r[key]])
+        else:
+            losses_comb[key] = losses_f[key] + losses_r[key]
+            losses_comb[key + '_f'] = losses_f[key]
+            losses_comb[key + '_r'] = losses_r[key]
+    return losses_comb
 
 
 # https://github.com/ilkarman/DeepLearningFrameworks/blob/master/notebooks/common/utils.py
@@ -40,7 +54,7 @@ def get_cuda_version():
         raise ValueError("Not in Windows, Linux or Mac")
     if os.path.isfile(path):
         with open(path, 'r') as f:
-            data = f.read().replace('\n','')
+            data = f.read().replace('\n', '')
         return data
     else:
         return "No CUDA in this machine"
