@@ -2,6 +2,7 @@ import argparse
 import os
 import sys
 
+import numpy as np
 import pandas as pd
 import torch
 
@@ -35,7 +36,10 @@ parser.add_argument("--from-tf", action='store_true',
 
 args = parser.parse_args()
 
-print("PyTorch version", torch.__version__)
+print("OS: ", sys.platform)
+print("Python: ", sys.version)
+print("PyTorch: ", torch.__version__)
+print("Numpy: ", np.__version__)
 
 USE_CUDA = not args.no_cuda
 device = torch.device("cuda:0" if USE_CUDA and torch.cuda.is_available() else "cpu")

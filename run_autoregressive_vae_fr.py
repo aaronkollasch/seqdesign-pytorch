@@ -10,7 +10,6 @@ import data_loaders
 import autoregressive_model
 import autoregressive_train
 import model_logging
-from utils import get_cuda_version, get_cudnn_version
 
 working_dir = '/n/groups/marks/users/aaron/autoregressive'
 data_dir = '/n/groups/marks/projects/autoregressive'
@@ -74,8 +73,6 @@ if device.type == 'cuda':
     print('Memory Usage:')
     print('Allocated:', round(torch.cuda.memory_allocated(0)/1024**3, 1), 'GB')
     print('Cached:   ', round(torch.cuda.memory_cached(0)/1024**3, 1), 'GB')
-    print(get_cuda_version())
-    print("CuDNN Version ", get_cudnn_version())
 print()
 
 print("Run:", run_name)
@@ -105,7 +102,7 @@ loader = data_loaders.GeneratorDataLoader(
     worker_init_fn=_init_fn
 )
 
-model = autoregressive_model.AutoregressiveFR(channels=args.channels, dropout_p=dropout_p_train)
+model = autoregressive_model.AutoregressiveVAEFR(channels=args.channels, dropout_p=dropout_p_train)
 model.to(device)
 
 trainer = autoregressive_train.AutoregressiveTrainer(

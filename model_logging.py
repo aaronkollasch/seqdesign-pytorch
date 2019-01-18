@@ -89,6 +89,9 @@ class TensorboardLogger(Logger):
                 if value.grad is not None:
                     self.histo_summary(tag + '/grad', value.grad.data.cpu().numpy(), current_step)
 
+        for tag, summary in self.trainer.model.image_summaries.items():
+            self.image_summary(tag, summary['img'], current_step, max_outputs=summary.get('max_outputs', 3))
+
     def validate(self, current_step):
         avg_loss, avg_accuracy = self.trainer.validate()
         self.scalar_summary('validation loss', avg_loss, current_step)
@@ -99,11 +102,18 @@ class TensorboardLogger(Logger):
         summary = tf.Summary(value=[tf.Summary.Value(tag=tag, simple_value=value)])
         self.writer.add_summary(summary, step)
 
-    def image_summary(self, tag, images, step):
-        """Log a list of images."""
+    def image_summary(self, tag, images, step, max_outputs=3):
+        """Log a tensor image.
+        :param tag: string summary name
+        :param images: (N, H, W, C)
+        :param step: current step
+        :param max_outputs: max N images to save
+        """
 
         img_summaries = []
-        for i, img in enumerate(images):
+        for i in range(min(images.size(0), max_outputs)):
+            img = images[i]
+
             # Write the image to a string
             s = BytesIO()
             scipy.misc.toimage(img).save(s, format="png")

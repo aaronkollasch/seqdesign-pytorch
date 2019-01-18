@@ -145,10 +145,7 @@ class Conv2d(nn.Module):
         self.causal = causal
         self.activation = activation
 
-        padding = []
-        for w, d in zip(kernel_width, dilation):
-            padding.append(d * (w-1)//2)
-        self.padding = tuple(padding)
+        self.padding = tuple(d * (w-1)//2 for w, d in zip(kernel_width, dilation))
 
         self.bias = Parameter(torch.Tensor(out_channels))
         self.weight_v = Parameter(torch.Tensor(out_channels, in_channels, *kernel_width))

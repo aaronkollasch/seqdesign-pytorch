@@ -11,6 +11,15 @@ from model_logging import Logger
 
 
 class AutoregressiveTrainer:
+    default_params = {
+            'lr': 0.001,
+            'weight_decay': 0,
+            'clip': 100.0,
+            'snapshot_path': None,
+            'snapshot_name': 'snapshot',
+            'snapshot_interval': 1000,
+        }
+
     def __init__(
             self,
             model,
@@ -27,14 +36,7 @@ class AutoregressiveTrainer:
             snapshot_exec_template=None,
             device=torch.device('cpu')
     ):
-        self.params = {
-            'lr': 0.001,
-            'weight_decay': 0,
-            'clip': 100.0,
-            'snapshot_path': None,
-            'snapshot_name': 'snapshot',
-            'snapshot_interval': 1000,
-        }
+        self.params = self.default_params.copy()
         if params is not None:
             self.params.update(params)
         if lr is not None:
@@ -59,25 +61,22 @@ class AutoregressiveTrainer:
         self.optimizer_type = optimizer
         self.logger = logger
         self.logger.trainer = self
-        self.current_step = 0
         self.device = device
 
         self.optimizer = self.optimizer_type(
             params=self.model.parameters(),
             lr=self.params['lr'], weight_decay=self.params['weight_decay'])
 
-    def train(self, steps=1e8, continue_at_step=None):
+    def train(self, steps=1e8):
         self.model.train()
         device = self.device
 
         data_iter = iter(self.loader)
         n_eff = self.loader.dataset.n_eff
 
-        if continue_at_step is not None:
-            self.current_step = continue_at_step
-
         print('    step  step-t load-t   loss       CE-loss    bitperchar   l2-norm', flush=True)
-        for step in range(int(self.current_step), int(steps)):
+        for step in range(int(self.model.step) + 1, int(steps) + 1):
+            self.model.step = step
             start = time.time()
 
             batch = next(data_iter)
@@ -126,9 +125,6 @@ class AutoregressiveTrainer:
                 break
 
             self.optimizer.step()
-            step += 1
-            self.model.step = step
-            self.current_step = step
 
             if step % self.params['snapshot_interval'] == 0:
                 if self.params['snapshot_path'] is None:
@@ -173,8 +169,6 @@ class AutoregressiveTrainer:
         if model_eval:
             self.model.eval()
 
-        n_eff = data_loader.dataset.n_eff
-
         print('    step  step-t  CE-loss     bit-per-char', flush=True)
         for i_iter in range(num_samples):  # TODO implement sampling
             output = {
@@ -200,13 +194,13 @@ class AutoregressiveTrainer:
                         output_logits_f, output_logits_r = self.model(
                             batch['prot_decoder_input'], batch['prot_mask_decoder'],
                             batch['prot_decoder_input_r'], batch['prot_mask_decoder'])
-                        losses = self.model.calculate_loss(
-                            output_logits_f, batch['prot_decoder_output'], batch['prot_mask_decoder'], n_eff,
-                            output_logits_r, batch['prot_decoder_output_r'], batch['prot_mask_decoder'], n_eff)
+                        losses = self.model.reconstruction_loss(
+                            output_logits_f, batch['prot_decoder_output'], batch['prot_mask_decoder'],
+                            output_logits_r, batch['prot_decoder_output_r'], batch['prot_mask_decoder'])
                     else:
                         output_logits_f = self.model(batch['prot_decoder_input'], batch['prot_mask_decoder'])
-                        losses = self.model.calculate_loss(
-                            output_logits_f, batch['prot_decoder_output'], batch['prot_mask_decoder'], n_eff)
+                        losses = self.model.reconstruction_loss(
+                            output_logits_f, batch['prot_decoder_output'], batch['prot_mask_decoder'])
 
                     ce_loss = losses['ce_loss_per_seq']
                     if self.run_fr:
@@ -234,11 +228,11 @@ class AutoregressiveTrainer:
         return output
 
     def save_state(self, last_batch=None):
-        snapshot = f"{self.params['snapshot_path']}/{self.params['snapshot_name']}_{self.current_step}.pth"
+        snapshot = f"{self.params['snapshot_path']}/{self.params['snapshot_name']}_{self.model.step}.pth"
         revive_exec = f"{self.params['snapshot_path']}/revive_executable/{self.params['snapshot_name']}.sh"
         torch.save(
             {
-                'step': self.current_step,
+                'step': self.model.step,
                 'model_type': self.model.model_type,
                 'model_state_dict': self.model.state_dict(),
                 'model_dims': self.model.dims,
@@ -263,6 +257,126 @@ class AutoregressiveTrainer:
             ))
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.current_step = checkpoint['step']
         self.model.step = checkpoint['step']
         self.params.update(checkpoint['train_params'])
+
+
+class AutoregressiveVAETrainer(AutoregressiveTrainer):
+    default_params = {
+        'lr': 0.001,
+        'weight_decay': 0,
+        'clip': 100.0,
+        'lagging_inference': True,
+        'lag_inf_inner_loop': 10,  # int, 'convergence'
+        'snapshot_path': None,
+        'snapshot_name': 'snapshot',
+        'snapshot_interval': 1000,
+        }
+
+    def __init__(
+            self,
+            model,
+            data_loader,
+            optimizer=optim.Adam,
+            params=None,
+            lr=None,
+            weight_decay=None,
+            gradient_clipping=None,
+            logger=Logger(),
+            snapshot_path=None,
+            snapshot_name=None,
+            snapshot_interval=None,
+            snapshot_exec_template=None,
+            device=torch.device('cpu')
+    ):
+        super(AutoregressiveVAETrainer, self).__init__(
+            model, data_loader,
+            optimizer=optimizer, params=params, lr=lr, weight_decay=weight_decay, gradient_clipping=gradient_clipping,
+            logger=logger, snapshot_path=snapshot_path, snapshot_name=snapshot_name,
+            snapshot_interval=snapshot_interval, snapshot_exec_template=snapshot_exec_template,
+            device=device
+        )
+
+        self.enc_optimizer = self.optimizer_type(
+            params=self.model.encoder_parameters(),
+            lr=self.params['lr'], weight_decay=self.params['weight_decay'])
+        self.dec_optimizer = self.optimizer_type(
+            params=self.model.decoder_parameters(),
+            lr=self.params['lr'], weight_decay=self.params['weight_decay'])
+
+        self.aggressive = True
+
+    def train(self, steps=1e8):
+        self.model.train()
+        device = self.device
+        params = self.params
+
+        data_iter = iter(self.loader)
+        n_eff = self.loader.dataset.n_eff
+
+        print('    step step-t load-t opt   loss       CE-loss    bitperchar   l2-norm     KL-loss', flush=True)
+        for step in range(int(self.model.step) + 1, int(steps) + 1):
+            self.model.step = step
+            start = time.time()
+
+            batch = next(data_iter)
+            for key in batch.keys():
+                batch[key] = batch[key].to(device, non_blocking=True)
+            data_load_time = time.time()-start
+
+            if params['lagging_inference']:
+                if not self.aggressive:  # TODO automatically disable 'aggressive' mode
+                    enable_gradient = 'ed'
+                elif params['lag_inf_inner_loop'] == 'convergence':
+                    enable_gradient = 'ed'  # TODO implement inner loop convergence
+                elif isinstance(params['lag_inf_inner_loop'], int):
+                    if (step + 1) % (params['lag_inf_inner_loop'] + 1) == 0:
+                        enable_gradient = 'd'
+                    else:
+                        enable_gradient = 'e'
+                else:
+                    enable_gradient = 'ed'
+                self.model.enable_gradient = enable_gradient
+
+            if self.run_fr:
+                output_logits_f, output_logits_r = self.model(
+                    batch['prot_decoder_input'], batch['prot_mask_decoder'],
+                    batch['prot_decoder_input_r'], batch['prot_mask_decoder'])
+                losses = self.model.calculate_loss(
+                    output_logits_f, batch['prot_decoder_output'], batch['prot_mask_decoder'], n_eff,
+                    output_logits_r, batch['prot_decoder_output_r'], batch['prot_mask_decoder'], n_eff)
+            else:
+                output_logits_f = self.model(batch['prot_decoder_input'], batch['prot_mask_decoder'])
+                losses = self.model.calculate_loss(
+                    output_logits_f, batch['prot_decoder_output'], batch['prot_mask_decoder'], n_eff)
+
+            loss = losses['loss']
+            ce_loss = losses['ce_loss']
+            kl_loss = losses['kl_embedding_loss']
+            weight_cost = losses['weight_cost']
+            bitperchar = losses['bitperchar']
+
+            self.enc_optimizer.zero_grad()
+            self.dec_optimizer.zero_grad()
+            loss.backward()
+
+            if params['clip'] is not None:
+                total_norm = nn.utils.clip_grad_norm_(self.model.parameters(), params['clip'])
+            else:
+                total_norm = 0.0
+
+            if 'e' in self.model.enable_gradient:
+                self.enc_optimizer.step()
+            if 'd' in self.model.enable_gradient:
+                self.dec_optimizer.step()
+
+            if step % params['snapshot_interval'] == 0:
+                if params['snapshot_path'] is None:
+                    continue
+                self.save_state()
+
+            self.logger.log(step, losses, total_norm)
+            print("{: 8d} {:6.3f} {:5.4f} {: >2} {:11.6f} {:11.6f} {:11.8f} {:10.6f} {:11.6f}".format(
+                step, time.time()-start, data_load_time, self.model.enable_gradient,
+                loss.detach(), ce_loss.detach(), bitperchar.detach(), weight_cost.detach(), kl_loss.detach()),
+                flush=True)
