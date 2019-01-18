@@ -35,12 +35,10 @@ def moments(x, dim, keepdim=False):
 class Normalize(autograd.Function):
     """Normalize x across dim
     """
-    eps = 1e-5
-
     @staticmethod
-    def forward(ctx, x, dim):
+    def forward(ctx, x, dim, eps=1e-5):
         x_mu = x - x.mean(dim=dim, keepdim=True)
-        inv_std = 1 / (x_mu.pow(2).mean(dim=dim, keepdim=True) + Normalize.eps).sqrt()
+        inv_std = 1 / (x_mu.pow(2).mean(dim=dim, keepdim=True) + eps).sqrt()
         x_norm = x_mu * inv_std
 
         if ctx is not None:
@@ -61,7 +59,7 @@ class Normalize(autograd.Function):
                  grad_out.sum(dim, keepdim=True) -
                  (grad_out * x_mu).sum(dim, keepdim=True) * x_mu * inv_std ** 2
              )
-        return dx, None
+        return dx, None, None
 
     @staticmethod
     def test():
