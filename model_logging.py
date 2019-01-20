@@ -4,7 +4,8 @@ from io import BytesIO
 
 import tensorflow as tf
 import numpy as np
-import scipy.misc
+from PIL import Image
+import torch
 
 
 class Logger:
@@ -73,9 +74,9 @@ class TensorboardLogger(Logger):
     def log(self, current_step, current_losses, current_grad_norm):
         super(TensorboardLogger, self).log(current_step, current_losses, current_grad_norm)
         self.scalar_summary('grad norm', current_grad_norm, current_step)
-        self.scalar_summary('loss', current_losses['loss'].detach().item(), current_step)
-        self.scalar_summary('reconstruction loss', current_losses['ce_loss'].detach().item(), current_step)
-        self.scalar_summary('regularization loss', current_losses['weight_cost'].detach().item(), current_step)
+        self.scalar_summary('loss', current_losses['loss'].detach(), current_step)
+        self.scalar_summary('reconstruction loss', current_losses['ce_loss'].detach(), current_step)
+        self.scalar_summary('regularization loss', current_losses['weight_cost'].detach(), current_step)
 
     def log_loss(self, current_step):
         # loss
@@ -85,9 +86,9 @@ class TensorboardLogger(Logger):
         if self.log_param_histograms:
             for tag, value, in self.trainer.model.named_parameters():
                 tag = tag.replace('.', '/')
-                self.histo_summary(tag, value.data.cpu().numpy(), current_step)
+                self.histo_summary(tag, value.data, current_step)
                 if value.grad is not None:
-                    self.histo_summary(tag + '/grad', value.grad.data.cpu().numpy(), current_step)
+                    self.histo_summary(tag + '/grad', value.grad.data, current_step)
 
         for tag, summary in self.trainer.model.image_summaries.items():
             self.image_summary(tag, summary['img'], current_step, max_outputs=summary.get('max_outputs', 3))
@@ -99,24 +100,27 @@ class TensorboardLogger(Logger):
 
     def scalar_summary(self, tag, value, step):
         """Log a scalar variable."""
+        if isinstance(value, torch.Tensor):
+            value = value.item()  # value must have 1 element only
         summary = tf.Summary(value=[tf.Summary.Value(tag=tag, simple_value=value)])
         self.writer.add_summary(summary, step)
 
     def image_summary(self, tag, images, step, max_outputs=3):
         """Log a tensor image.
         :param tag: string summary name
-        :param images: (N, H, W, C)
+        :param images: (N, H, W, C) or (N, H, W)
         :param step: current step
         :param max_outputs: max N images to save
         """
 
         img_summaries = []
         for i in range(min(images.size(0), max_outputs)):
-            img = images[i]
+            img = images[i].cpu().numpy()
 
             # Write the image to a string
             s = BytesIO()
-            scipy.misc.toimage(img).save(s, format="png")
+            Image.fromarray(img, 'RGB').save(s, format="png")
+            # scipy.misc.toimage(img).save(s, format="png")
 
             # Create an Image object
             img_sum = tf.Summary.Image(encoded_image_string=s.getvalue(),
@@ -131,6 +135,7 @@ class TensorboardLogger(Logger):
 
     def histo_summary(self, tag, values, step, bins=200):
         """Log a histogram of the tensor of values."""
+        values = values.cpu().numpy()
 
         # Create a histogram using numpy
         counts, bin_edges = np.histogram(values, bins=bins)

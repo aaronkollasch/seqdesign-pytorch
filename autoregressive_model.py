@@ -325,17 +325,9 @@ class AutoregressiveFR(nn.Module):
         )
         return comb_losses(losses_f, losses_r)
 
-    def calculate_loss(
-            self,
-            seq_logits_f, target_seqs_f, mask_f, n_eff_f,
-            seq_logits_r, target_seqs_r, mask_r, n_eff_r
-    ):
-        losses_f = self.model.model_f.calculate_loss(
-            seq_logits_f, target_seqs_f, mask_f, n_eff_f
-        )
-        losses_r = self.model.model_r.calculate_loss(
-            seq_logits_r, target_seqs_r, mask_r, n_eff_r
-        )
+    def calculate_loss(self, *args):
+        losses_f = self.model.model_f.calculate_loss(*args[:len(args)//2])
+        losses_r = self.model.model_r.calculate_loss(*args[len(args)//2:])
         return comb_losses(losses_f, losses_r)
 
 
@@ -368,12 +360,12 @@ class AutoregressiveVAE(nn.Module):
             "encoder": {
                 "channels": 48,
                 "nonlinearity": "elu",
-                "embedding_nnet_nonlinearity": "elu",
                 "num_dilation_blocks": 3,
                 "num_layers": 9,
                 "dilation_schedule": None,
                 "transformer": False,
                 "inverse_temperature": False,
+                "embedding_nnet_nonlinearity": "elu",
                 "embedding_nnet_size": 200,
                 "latent_size": 30,
                 "dropout_p": 0.3,
@@ -381,9 +373,9 @@ class AutoregressiveVAE(nn.Module):
             },
             "decoder": {
                 "channels": 48,
-                "nonlinearity": "relu",
-                "num_dilation_blocks": 1,
-                "num_layers": 5,
+                "nonlinearity": "elu",
+                "num_dilation_blocks": 3,
+                "num_layers": 9,
                 "dilation_schedule": None,
                 "transformer": False,
                 "inverse_temperature": False,
@@ -452,7 +444,8 @@ class AutoregressiveVAE(nn.Module):
         self.encoder.emb_log_sigma_one = nn.Linear(enc_params['channels'], enc_params['embedding_nnet_size'])
         self.encoder.emb_mu_out = nn.Linear(enc_params['embedding_nnet_size'], enc_params['latent_size'])
         self.encoder.emb_log_sigma_out = nn.Linear(enc_params['embedding_nnet_size'], enc_params['latent_size'])
-
+        # TODO try adding flow
+        4
         # initialize decoder
         dec_params = self.hyperparams['decoder']
         nonlin = nonlinearity(dec_params['nonlinearity'])
@@ -470,8 +463,10 @@ class AutoregressiveVAE(nn.Module):
         self.decoder.start_conv = layers.Conv2d(
             (
                 self.dims['alphabet'] +
-                dec_params['pos_emb_max_len'] // dec_params['pos_emb_step']
-                if dec_params['positional_embedding'] else 0 +
+                (
+                    dec_params['pos_emb_max_len'] // dec_params['pos_emb_step']
+                    if dec_params['positional_embedding'] else 0
+                ) +
                 enc_params['latent_size']
             ),
             dec_params['channels'],
@@ -532,7 +527,8 @@ class AutoregressiveVAE(nn.Module):
     @staticmethod
     def _kl_standard_normal(mu, log_sigma):
         """ KL divergence between two Diagonal Gaussians """
-        return -0.5 * (1.0 + 2.0 * log_sigma - mu.pow(2) - (2.0 * log_sigma).exp())
+        return 0.5 * (mu.pow(2) + (2.0 * log_sigma).exp() - 2.0 * log_sigma - 1)
+        # return dist.kl_divergence(dist.Normal(mu, log_sigma.exp()), dist.Normal(0., 1.))
 
     @staticmethod
     def _log_gaussian(z, prior_mu, prior_sigma):
@@ -581,7 +577,9 @@ class AutoregressiveVAE(nn.Module):
     def sampler(self, mu, log_sigma, stddev=1.):
         if self.hyperparams["embedding_hyperparams"]["anneal_noise"]:
             stddev = self._anneal_embedding(self.step)
-        return dist.Normal(mu, log_sigma.exp() * stddev).rsample()
+        # return dist.Normal(mu, log_sigma.exp() * stddev).rsample()
+        eps = torch.zeros_like(log_sigma).normal_(std=stddev)
+        return mu + log_sigma.exp() * eps
 
     def weight_costs(self):
         return (
@@ -593,22 +591,16 @@ class AutoregressiveVAE(nn.Module):
     def parameter_count(self):
         return sum(param.numel() for param in self.parameters())
 
-    def forward(self, inputs, input_masks):
-        """
-        :param inputs: (N, C_in, 1, L)
-        :param input_masks: (N, 1, 1, L)
-        :return:
-        """
-        # encoder
+    def encode(self, inputs, input_masks):
         enc_params = self.hyperparams['encoder']
 
-        up_val_1d = self.encoder.start_conv(inputs)
+        up_val_1d = self.encoder.start_conv(inputs)  # TODO use special input for encoder
         for convnet in self.encoder.dilation_blocks:
             up_val_1d = convnet(up_val_1d, input_masks)
 
         nonlin = nonlinearity(enc_params['embedding_nnet_nonlinearity'])
         up_val_1d = up_val_1d * input_masks
-        up_val_mu_logsigma_2d = up_val_1d.sum(dim=[2, 3]) / input_masks.sum(dim=[2, 3])
+        up_val_mu_logsigma_2d = up_val_1d.sum(dim=[2, 3]) / input_masks.sum(dim=[2, 3])  # TODO global max pooling?
 
         up_val_mu_2d = nonlin(self.encoder.emb_mu_one(up_val_mu_logsigma_2d))
         up_val_log_sigma_2d = nonlin(self.encoder.emb_log_sigma_one(up_val_mu_logsigma_2d))
@@ -616,20 +608,17 @@ class AutoregressiveVAE(nn.Module):
         mu_2d = self.encoder.emb_mu_out(up_val_mu_2d)
         log_sigma_2d = self.encoder.emb_log_sigma_out(up_val_log_sigma_2d)
 
-        self.forward_state['kl_embedding'] = self._kl_standard_normal(mu_2d, log_sigma_2d)
-        z_2d = self.sampler(mu_2d, log_sigma_2d)
-
         self.image_summaries['mu'] = dict(
             img=mu_2d.unsqueeze(-1).unsqueeze(-1).permute(2, 1, 0, 3).detach(), max_outputs=1)
         self.image_summaries['log_sigma'] = dict(
             img=log_sigma_2d.unsqueeze(-1).unsqueeze(-1).permute(2, 1, 0, 3).detach(), max_outputs=1)
-        self.image_summaries['z'] = dict(
-                img=z_2d.unsqueeze(-1).unsqueeze(-1).permute(2, 1, 0, 3).detach(), max_outputs=1)
 
-        # decoder
+        return mu_2d, log_sigma_2d
+
+    def decode(self, inputs, input_masks, z):
         dec_params = self.hyperparams['decoder']
 
-        z = z_2d.unsqueeze(-1).unsqueeze(-1).expand((-1, -1, 1, inputs.size(3)))
+        z = z.unsqueeze(-1).unsqueeze(-1).expand((-1, -1, 1, inputs.size(3)))
         if dec_params['positional_embedding']:
             number_range = torch.arange(0, inputs.size(3), dtype=inputs.dtype, device=inputs.device)
             number_range = number_range.view(1, 1, 1, inputs.size(3))
@@ -645,8 +634,24 @@ class AutoregressiveVAE(nn.Module):
         self.image_summaries['LayerFeatures'] = dict(img=up_val_1d.permute(0, 1, 3, 2).detach(), max_outputs=3)
 
         up_val_1d = self.decoder.end_conv(up_val_1d)
-
         return up_val_1d
+
+    def forward(self, inputs, input_masks):
+        """
+        :param inputs: (N, C_in, 1, L)
+        :param input_masks: (N, 1, 1, L)
+        :return: up_val_1d: (N, C_out, 1, L), kl_embedding: (N, C_emb)
+        """
+        mu_2d, log_sigma_2d = self.encode(inputs, input_masks)
+
+        kl_embedding = self._kl_standard_normal(mu_2d, log_sigma_2d)
+        z_2d = self.sampler(mu_2d, log_sigma_2d)
+        self.image_summaries['z'] = dict(
+                img=z_2d.unsqueeze(-1).unsqueeze(-1).permute(2, 1, 0, 3).detach(), max_outputs=1)
+
+        up_val_1d = self.decode(inputs, input_masks, z_2d)
+
+        return up_val_1d, kl_embedding
 
     @staticmethod
     def reconstruction_loss(seq_logits, target_seqs, mask):
@@ -671,11 +676,12 @@ class AutoregressiveVAE(nn.Module):
         }
 
     def calculate_loss(
-            self, seq_logits, target_seqs, mask, n_eff
+            self, seq_logits, kl_embedding, target_seqs, mask, n_eff
     ):
         """
 
         :param seq_logits: (N, C, 1, L)
+        :param kl_embedding: (N, C)
         :param target_seqs: (N, C, 1, L) as one-hot
         :param mask: (N, 1, 1, L)
         :param n_eff:
@@ -695,11 +701,11 @@ class AutoregressiveVAE(nn.Module):
         kl_loss = weight_cost
 
         # embedding calculation
-        embed_cost_per_seq = self.forward_state['kl_embedding'].sum(1)
+        embed_cost_per_seq = kl_embedding.sum(1)
         kl_embedding_loss = embed_cost_per_seq.mean()
 
         # merge losses
-        loss_per_seq = reconstruction_loss['ce_loss_per_seq']
+        loss_per_seq = reconstruction_loss['ce_loss_per_seq'] + embed_cost_per_seq * self._anneal_embedding(self.step)
         loss = reconstruction_loss['ce_loss'] + weight_cost + kl_embedding_loss * self._anneal_embedding(self.step)
 
         # KL loss
@@ -738,6 +744,41 @@ class AutoregressiveVAE(nn.Module):
         output.update(reconstruction_loss)
         return output
 
+    def calc_mi(self, x, x_mask):
+        """Approximate the mutual information between x and z
+        I(x, z) = E_xE_{q(z|x)}log(q(z|x)) - E_xE_{q(z|x)}log(q(z))
+
+        return: Float
+        """
+        # [x_batch, nz]
+        mu, logstd = self.encode(x, x_mask)
+        logvar = logstd * 2.0
+
+        x_batch, nz = mu.size()
+
+        # E_{q(z|x)}log(q(z|x)) = -0.5*nz*log(2*\pi) - 0.5*(1+logvar).sum(-1)
+        neg_entropy = (-0.5 * nz * math.log(2 * math.pi) - 0.5 * (1 + logvar).sum(-1)).mean()
+
+        # [z_batch, 1, nz]
+        z_samples = dist.Normal(mu, logstd.exp()).rsample().unsqueeze(1)
+
+        # [1, x_batch, nz]
+        mu, logvar = mu.unsqueeze(0), logvar.unsqueeze(0)
+        var = logvar.exp()
+
+        # (z_batch, x_batch, nz)
+        dev = z_samples - mu
+
+        # (z_batch, x_batch)
+        log_density = -0.5 * ((dev ** 2) / var).sum(dim=-1) - \
+                      0.5 * (nz * math.log(2 * math.pi) + logvar.sum(-1))
+
+        # log q(z): aggregate posterior
+        # [z_batch]
+        log_qz = torch.logsumexp(log_density, dim=1) - math.log(x_batch)
+
+        return (neg_entropy - log_qz.mean(-1)).item()
+
 
 class AutoregressiveVAEFR(AutoregressiveFR):
     sub_model_class = AutoregressiveVAE
@@ -763,3 +804,23 @@ class AutoregressiveVAEFR(AutoregressiveFR):
 
     def decoder_parameters(self):
         return list(self.model.model_f.decoder.parameters()) + list(self.model.model_r.decoder.parameters())
+
+    def encode(self, input_f, mask_f, input_r, mask_r):
+        mu_f, log_sigma_f = self.model.model_f.encode(input_f, mask_f)
+        mu_r, log_sigma_r = self.model.model_r.encode(input_r, mask_r)
+        return mu_f, log_sigma_f, mu_r, log_sigma_r
+
+    def decode(self, input_f, mask_f, z_f, input_r, mask_r, z_r):
+        up_val_1d_f = self.model.model_f.encode(input_f, mask_f, z_f)
+        up_val_1d_r = self.model.model_r.encode(input_r, mask_r, z_r)
+        return up_val_1d_f, up_val_1d_r
+
+    def forward(self, input_f, mask_f, input_r, mask_r):
+        output_logits_f, kl_embedding_f = self.model.model_f(input_f, mask_f)
+        output_logits_r, kl_embedding_r = self.model.model_r(input_r, mask_r)
+        return output_logits_f, kl_embedding_f, output_logits_r, kl_embedding_r
+
+    def calc_mi(self, input_f, mask_f, input_r, mask_r):
+        mi_f = self.model.model_f.calc_mi(input_f, mask_f)
+        mi_r = self.model.model_r.calc_mi(input_r, mask_r)
+        return (mi_f + mi_r) / 2.

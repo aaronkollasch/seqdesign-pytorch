@@ -267,7 +267,8 @@ class AutoregressiveVAETrainer(AutoregressiveTrainer):
         'weight_decay': 0,
         'clip': 100.0,
         'lagging_inference': True,
-        'lag_inf_inner_loop': 10,  # int, 'convergence'
+        'lag_inf_convergence': True,
+        'lag_inf_inner_loop_max_steps': 100,
         'snapshot_path': None,
         'snapshot_name': 'snapshot',
         'snapshot_interval': 1000,
@@ -310,9 +311,13 @@ class AutoregressiveVAETrainer(AutoregressiveTrainer):
         self.model.train()
         device = self.device
         params = self.params
+        epoch = 1
+        pre_mi = 0
 
         data_iter = iter(self.loader)
         n_eff = self.loader.dataset.n_eff
+
+        test_batch = [next(data_iter) for _ in range(4)]
 
         print('    step step-t load-t opt   loss       CE-loss    bitperchar   l2-norm     KL-loss', flush=True)
         for step in range(int(self.model.step) + 1, int(steps) + 1):
@@ -324,31 +329,81 @@ class AutoregressiveVAETrainer(AutoregressiveTrainer):
                 batch[key] = batch[key].to(device, non_blocking=True)
             data_load_time = time.time()-start
 
-            if params['lagging_inference']:
-                if not self.aggressive:  # TODO automatically disable 'aggressive' mode
-                    enable_gradient = 'ed'
-                elif params['lag_inf_inner_loop'] == 'convergence':
-                    enable_gradient = 'ed'  # TODO implement inner loop convergence
-                elif isinstance(params['lag_inf_inner_loop'], int):
-                    if (step + 1) % (params['lag_inf_inner_loop'] + 1) == 0:
-                        enable_gradient = 'd'
+            if params['lagging_inference'] and self.aggressive:
+                self.model.enable_gradient = 'e'
+
+                # lagging inference variables
+                sub_batch = batch
+                burn_cur_loss = 0
+                burn_total_chars = 0
+                burn_pre_loss = 1e4
+
+                for sub_iter in range(1, params['lag_inf_inner_loop_max_steps']+1):
+                    self.enc_optimizer.zero_grad()
+                    self.dec_optimizer.zero_grad()
+
+                    if self.run_fr:
+                        output_logits_f, kl_embedding_f, output_logits_r, kl_embedding_r = self.model(
+                            sub_batch['prot_decoder_input'], sub_batch['prot_mask_decoder'],
+                            sub_batch['prot_decoder_input_r'], sub_batch['prot_mask_decoder'])
+                        losses = self.model.calculate_loss(
+                            output_logits_f, kl_embedding_f,
+                            sub_batch['prot_decoder_output'], sub_batch['prot_mask_decoder'], n_eff,
+                            output_logits_r, kl_embedding_f,
+                            sub_batch['prot_decoder_output_r'], sub_batch['prot_mask_decoder'], n_eff)
                     else:
-                        enable_gradient = 'e'
-                else:
-                    enable_gradient = 'ed'
-                self.model.enable_gradient = enable_gradient
+                        output_logits_f, kl_embedding_f = self.model(
+                            sub_batch['prot_decoder_input'], sub_batch['prot_mask_decoder'])
+                        losses = self.model.calculate_loss(
+                            output_logits_f, kl_embedding_f,
+                            sub_batch['prot_decoder_output'], sub_batch['prot_mask_decoder'], n_eff)
+
+                    burn_cur_loss += losses['loss_per_seq'].sum().item()
+                    burn_total_chars += sub_batch['prot_mask_decoder'].sum().item()
+                    loss = losses['loss']
+                    # ce_loss = losses['ce_loss']
+                    # kl_loss = losses['kl_embedding_loss']
+                    # weight_cost = losses['weight_cost']
+                    # bitperchar = losses['bitperchar']
+                    loss.backward()
+
+                    if params['clip'] is not None:
+                        nn.utils.clip_grad_norm_(self.model.parameters(), params['clip'])
+                    self.enc_optimizer.step()
+
+                    # print("{: 8d} {:6.3f} {:5.4f} {: >2} {:11.6f} {:11.6f} {:11.8f} {:10.6f} {:11.6g}".format(
+                    #     sub_iter, time.time() - start, data_load_time, self.model.enable_gradient,
+                    #     loss.detach(), ce_loss.detach(), bitperchar.detach(), weight_cost.detach(), kl_loss.detach()),
+                    #     flush=True)
+
+                    if params['lag_inf_convergence']:
+                        if sub_iter % 15 == 0:
+                            burn_cur_loss = burn_cur_loss / burn_total_chars
+                            if burn_pre_loss < burn_cur_loss:
+                                break
+                            burn_pre_loss = burn_cur_loss
+                            burn_cur_loss = 0
+                            burn_total_chars = 0
+
+                    sub_batch = next(data_iter)
+                    for key in sub_batch.keys():
+                        sub_batch[key] = sub_batch[key].to(device, non_blocking=True)
+
+                self.model.enable_gradient = 'd'
+            else:
+                self.model.enable_gradient = 'ed'
 
             if self.run_fr:
-                output_logits_f, output_logits_r = self.model(
+                output_logits_f, kl_embedding_f, output_logits_r, kl_embedding_r = self.model(
                     batch['prot_decoder_input'], batch['prot_mask_decoder'],
                     batch['prot_decoder_input_r'], batch['prot_mask_decoder'])
                 losses = self.model.calculate_loss(
-                    output_logits_f, batch['prot_decoder_output'], batch['prot_mask_decoder'], n_eff,
-                    output_logits_r, batch['prot_decoder_output_r'], batch['prot_mask_decoder'], n_eff)
+                    output_logits_f, kl_embedding_f, batch['prot_decoder_output'], batch['prot_mask_decoder'], n_eff,
+                    output_logits_r, kl_embedding_f, batch['prot_decoder_output_r'], batch['prot_mask_decoder'], n_eff)
             else:
-                output_logits_f = self.model(batch['prot_decoder_input'], batch['prot_mask_decoder'])
+                output_logits_f, kl_embedding_f = self.model(batch['prot_decoder_input'], batch['prot_mask_decoder'])
                 losses = self.model.calculate_loss(
-                    output_logits_f, batch['prot_decoder_output'], batch['prot_mask_decoder'], n_eff)
+                    output_logits_f, kl_embedding_f, batch['prot_decoder_output'], batch['prot_mask_decoder'], n_eff)
 
             loss = losses['loss']
             ce_loss = losses['ce_loss']
@@ -370,13 +425,104 @@ class AutoregressiveVAETrainer(AutoregressiveTrainer):
             if 'd' in self.model.enable_gradient:
                 self.dec_optimizer.step()
 
+            if step % self.loader.dataset.n_eff == 0:
+                self.model.eval()
+                with torch.no_grad():
+                    cur_mi = calc_mi(self.model, test_batch, run_fr=self.run_fr, device=self.device)
+                    au, _, au_r, _ = calc_au(self.model, test_batch, run_fr=self.run_fr, device=self.device)
+                self.model.train()
+                print(f"epoch: {epoch}, active units: {au}f {au_r}r")
+                print(f"pre mi: {pre_mi:.4f}, cur mi: {cur_mi:.4f}")
+                if self.aggressive and cur_mi < pre_mi:
+                    self.aggressive = False
+                    print("STOP BURNING")
+                pre_mi = cur_mi
+
             if step % params['snapshot_interval'] == 0:
                 if params['snapshot_path'] is None:
                     continue
                 self.save_state()
 
             self.logger.log(step, losses, total_norm)
-            print("{: 8d} {:6.3f} {:5.4f} {: >2} {:11.6f} {:11.6f} {:11.8f} {:10.6f} {:11.6f}".format(
+            print("{: 8d} {:6.3f} {:5.4f} {: >2} {:11.6f} {:11.6f} {:11.8f} {:10.6f} {:11.6g}".format(
                 step, time.time()-start, data_load_time, self.model.enable_gradient,
                 loss.detach(), ce_loss.detach(), bitperchar.detach(), weight_cost.detach(), kl_loss.detach()),
                 flush=True)
+
+
+def calc_mi(model, test_data_batch, run_fr=False, device=torch.device('cpu')):
+    mi = 0
+    num_examples = 0
+    for batch_data in test_data_batch:
+        batch_size = batch_data['prot_decoder_input'].size(0)
+        num_examples += batch_size
+        if run_fr:
+            prot_decoder_input, prot_mask_decoder, prot_decoder_input_r = \
+                batch_data['prot_decoder_input'].to(device), batch_data['prot_mask_decoder'].to(device), \
+                batch_data['prot_decoder_input_r'].to(device)
+            mutual_info = model.calc_mi(prot_decoder_input, prot_mask_decoder,
+                                        prot_decoder_input_r, prot_mask_decoder)
+        else:
+            prot_decoder_input, prot_mask_decoder = \
+                batch_data['prot_decoder_input'].to(device), batch_data['prot_mask_decoder'].to(device)
+            mutual_info = model.calc_mi(prot_decoder_input, prot_mask_decoder)
+        mi += mutual_info * batch_size
+    return mi / num_examples
+
+
+def calc_au(model, test_data_batch, delta=0.01, run_fr=False, device=torch.device('cpu')):
+    """compute the number of active units
+    """
+    means_sum = 0
+    cnt = 0
+    means_sum_r = 0
+    for batch_data in test_data_batch:
+        if run_fr:
+            prot_decoder_input, prot_mask_decoder, prot_decoder_input_r = \
+                batch_data['prot_decoder_input'].to(device), batch_data['prot_mask_decoder'].to(device), \
+                batch_data['prot_decoder_input_r'].to(device)
+            mu_f, _, mu_r, _ = model.encode(prot_decoder_input, prot_mask_decoder,
+                                            prot_decoder_input_r, prot_mask_decoder)
+        else:
+            prot_decoder_input, prot_mask_decoder = \
+                batch_data['prot_decoder_input'].to(device), batch_data['prot_mask_decoder'].to(device)
+            mu_f, _ = model.encode(prot_decoder_input, prot_mask_decoder)
+            mu_r = None
+        means_sum += mu_f.sum(dim=0, keepdim=True)
+        cnt += mu_f.size(0)
+        if run_fr:
+            means_sum_r += mu_r.sum(dim=0, keepdim=True)
+
+    # (1, nz)
+    mean_mean = means_sum / cnt
+    mean_mean_r = means_sum_r / cnt
+
+    var_sum = 0
+    cnt = 0
+    var_sum_r = 0
+    for batch_data in test_data_batch:
+        if run_fr:
+            prot_decoder_input, prot_mask_decoder, prot_decoder_input_r = \
+                batch_data['prot_decoder_input'].to(device), batch_data['prot_mask_decoder'].to(device), \
+                batch_data['prot_decoder_input_r'].to(device)
+            mu_f, _, mu_r, _ = model.encode(prot_decoder_input, prot_mask_decoder,
+                                            prot_decoder_input_r, prot_mask_decoder)
+        else:
+            prot_decoder_input, prot_mask_decoder = \
+                batch_data['prot_decoder_input'].to(device), batch_data['prot_mask_decoder'].to(device)
+            mu_f, _ = model.encode(prot_decoder_input, prot_mask_decoder)
+            mu_r = None
+        var_sum += ((mu_f - mean_mean) ** 2).sum(dim=0)
+        cnt += mu_f.size(0)
+        if run_fr:
+            var_sum_r += ((mu_r - mean_mean_r) ** 2).sum(dim=0)
+
+    # (nz)
+    au_var = var_sum / (cnt - 1)
+    au = (au_var >= delta).sum().item()
+    if run_fr:
+        au_var_r = var_sum_r / (cnt - 1)
+        au_r = (au_var_r >= delta).sum().item()
+    else:
+        au_r, au_var_r = None, None
+    return au, au_var, au_r, au_var_r

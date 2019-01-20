@@ -27,6 +27,8 @@ parser.add_argument("--restore", type=str, default=None,
                     help="Snapshot path for restoring a model to continue training.")
 parser.add_argument("--r-seed", type=int, default=42,
                     help="Random seed")
+parser.add_argument("--no-lag-inf", action='store_true',
+                    help="Disable lagging inference")
 parser.add_argument("--no-cuda", action='store_true',
                     help="Disable GPU training")
 args = parser.parse_args()
@@ -105,7 +107,7 @@ loader = data_loaders.GeneratorDataLoader(
 model = autoregressive_model.AutoregressiveVAEFR(channels=args.channels, dropout_p=dropout_p_train)
 model.to(device)
 
-trainer = autoregressive_train.AutoregressiveTrainer(
+trainer = autoregressive_train.AutoregressiveVAETrainer(
     model=model,
     data_loader=loader,
     snapshot_path=working_dir + '/snapshots',
@@ -124,6 +126,8 @@ trainer = autoregressive_train.AutoregressiveTrainer(
 if args.restore is not None:
     print("Restoring model from:", args.restore)
     trainer.load_state(args.restore)
+if args.no_lag_inf:
+    trainer.params['lagging_inference'] = False
 print("Num parameters:", model.parameter_count())
 
 trainer.train(steps=num_iterations)

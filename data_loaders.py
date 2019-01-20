@@ -63,6 +63,7 @@ class GeneratorDataLoader(data.DataLoader):
 
 
 class SequenceDataset(GeneratorDataset):
+    """Abstract sequence dataset"""
     def __init__(
             self,
             batch_size=32,
@@ -102,7 +103,7 @@ class SequenceDataset(GeneratorDataset):
     def __getitem__(self, index):
         raise NotImplementedError
 
-    def sequences_to_onehot(self, sequences, reverse=False, matching=False):
+    def sequences_to_onehot(self, sequences, reverse=None, matching=None):
         """
 
         :param sequences: list of strings
@@ -110,6 +111,8 @@ class SequenceDataset(GeneratorDataset):
         :param matching: output forward and reverse sequences
         :return: dictionary of strings
         """
+        reverse = self.reverse if reverse is None else reverse
+        matching = self.matching if matching is None else matching
         num_seqs = len(sequences)
         max_seq_len = max([len(seq) for seq in sequences]) + 1
         prot_decoder_output = torch.zeros((num_seqs, len(self.alphabet), 1, max_seq_len))
@@ -224,7 +227,7 @@ class FastaDataset(SequenceDataset):
             indices = np.arange(first_index, last_index)
 
         seqs = self.sequences[indices]
-        batch = self.sequences_to_onehot(seqs, self.reverse, self.matching)
+        batch = self.sequences_to_onehot(seqs)
         batch['names'] = self.names[indices]
         batch['sequences'] = seqs
         return batch
@@ -344,7 +347,7 @@ class SingleFamilyDataset(SequenceDataset):
         seq_idx = np.random.choice(len(family_seqs), self.batch_size, p=family_weights)
         seqs = [family_seqs[idx] for idx in seq_idx]
 
-        batch = self.sequences_to_onehot(seqs, self.reverse, self.matching)
+        batch = self.sequences_to_onehot(seqs)
         return batch
 
 
@@ -427,5 +430,5 @@ class DoubleWeightedNanobodyDataset(SequenceDataset):
             # then grab the associated sequence
             seqs.append(self.name_to_sequence[seq_name])
 
-        batch = self.sequences_to_onehot(seqs, self.reverse, self.matching)
+        batch = self.sequences_to_onehot(seqs)
         return batch
