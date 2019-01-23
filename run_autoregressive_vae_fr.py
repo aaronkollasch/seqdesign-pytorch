@@ -31,11 +31,13 @@ parser.add_argument("--no-lag-inf", action='store_true',
                     help="Disable lagging inference")
 parser.add_argument("--lag-inf-max-steps", type=int, default=None,
                     help="Disable lagging inference")
+parser.add_argument("--dropout-p", type=float, default=0.5,
+                    help="Decoder dropout probability (p of zeroing an element, not retention)")
 parser.add_argument("--no-cuda", action='store_true',
                     help="Disable GPU training")
 args = parser.parse_args()
 
-run_name = f"{args.dataset}_elu_channels-{args.channels}_rseed-{args.r_seed}" \
+run_name = f"{args.dataset}_VAE_elu_channels-{args.channels}_dropout-{args.dropout_p}_rseed-{args.r_seed}" \
     f"_start-{time.strftime('%y%b%d_%H%M', time.localtime())}"
 
 sbatch_executable = f"""#!/bin/bash
@@ -52,7 +54,8 @@ pwd
 module load gcc/6.2.0 cuda/9.0
 srun stdbuf -oL -eL {sys.executable} \\
   {sys.argv[0]} \\
-  --dataset {args.dataset} --num-iterations {args.num_iterations} --channels {args.channels} --r_seed {args.r_seed} \\
+  --dataset {args.dataset} --num-iterations {args.num_iterations} \\
+  --channels {args.channels} --dropout-p {args.dropout_p} --r-seed {args.r_seed} \\
   --restore {{restore}}
 """
 
@@ -86,7 +89,7 @@ batch_size = 30
 num_iterations = args.num_iterations
 
 plot_train = 100
-dropout_p_train = 0.5
+dropout_p_train = args.dropout_p
 
 # fitness_check = 2
 # fitness_start = 2
@@ -106,12 +109,23 @@ loader = data_loaders.GeneratorDataLoader(
     worker_init_fn=_init_fn
 )
 
-model = autoregressive_model.AutoregressiveVAEFR(channels=args.channels, dropout_p=dropout_p_train)
+if args.restore is not None:
+    print("Restoring model from:", args.restore)
+    checkpoint = torch.load(args.restore, map_location='cpu' if device.type == 'cpu' else None)
+    dims = checkpoint['model_dims']
+    hyperparams = checkpoint['model_hyperparams']
+    trainer_params = checkpoint['train_params']
+    model = autoregressive_model.AutoregressiveVAEFR(dims=dims, hyperparams=hyperparams, dropout_p=dropout_p_train)
+else:
+    checkpoint = args.restore
+    trainer_params = None
+    model = autoregressive_model.AutoregressiveVAEFR(channels=args.channels, dropout_p=dropout_p_train)
 model.to(device)
 
 trainer = autoregressive_train.AutoregressiveVAETrainer(
     model=model,
     data_loader=loader,
+    params=trainer_params,
     snapshot_path=working_dir + '/snapshots',
     snapshot_name=run_name,
     snapshot_interval=args.num_iterations // 10,
@@ -126,8 +140,7 @@ trainer = autoregressive_train.AutoregressiveVAETrainer(
     )
 )
 if args.restore is not None:
-    print("Restoring model from:", args.restore)
-    trainer.load_state(args.restore)
+    trainer.load_state(checkpoint)
 if args.no_lag_inf:
     trainer.params['lagging_inference'] = False
 if args.lag_inf_max_steps is not None:

@@ -45,9 +45,10 @@ class Autoregressive(nn.Module):
                 "dilation_schedule": None,
                 "transformer": False,  # TODO transformer
                 "inverse_temperature": False,
-                "dropout_type": "inter",  # options = "final", "inter", "gaussian"  # TODO what is gaussian?
+                "dropout_loc": "inter",  # options = "final", "inter", "gaussian"  # TODO what is gaussian?
                 "dropout_p": 0.5,  # probability of zeroing out value
-                "config": "original",  # options = "original", "standard"
+                "dropout_type": "2D",
+                "config": "updated",  # options = "original", "updated", "standard"
             },
             "sampler_hyperparams": {
                 'warm_up': 1,
@@ -96,6 +97,7 @@ class Autoregressive(nn.Module):
                 channels=enc_params['channels'],
                 layers=enc_params['num_layers'],
                 dropout_p=enc_params['dropout_p'],
+                dropout_type=enc_params['dropout_type'],
                 causal=True,
                 config=enc_params['config'],
                 dilation_schedule=enc_params['dilation_schedule'],
@@ -103,7 +105,7 @@ class Autoregressive(nn.Module):
                 nonlinearity=nonlin,
             ))
 
-        if enc_params['dropout_type'] == "final":
+        if enc_params['dropout_loc'] == "final":
             self.final_dropout = nn.Dropout(max(enc_params['dropout_p']-0.3, 0.))
         else:
             self.register_parameter('final_dropout', None)
@@ -171,15 +173,18 @@ class Autoregressive(nn.Module):
         :return:
         """
         if self.generating:
-            return self.forward_at_end(inputs, input_masks)
-            # pass
+            if self.generating_reset:
+                self.generating_reset = False
+            else:
+                inputs = inputs[:, :, :, -1:]
+            # return self.forward_at_end(inputs, input_masks)
         enc_params = self.hyperparams['encoder']
 
         up_val_1d = self.start_conv(inputs)
         for convnet in self.dilation_blocks:
             up_val_1d = convnet(up_val_1d, input_masks)
         self.image_summaries['LayerFeatures'] = dict(img=up_val_1d.permute(0, 1, 3, 2).detach(), max_outputs=3)
-        if enc_params['dropout_type'] == "final":
+        if enc_params['dropout_loc'] == "final":
             up_val_1d = self.final_dropout(up_val_1d)
         up_val_1d = self.end_conv(up_val_1d)
         return up_val_1d
@@ -194,22 +199,16 @@ class Autoregressive(nn.Module):
 
         if self.generating_reset:
             self.generating_reset = False
-            up_val_1d = self.start_conv(inputs)
-            for convnet in self.dilation_blocks:
-                up_val_1d = convnet(up_val_1d, input_masks)
-            if enc_params['dropout_type'] == "final":
-                up_val_1d = self.final_dropout(up_val_1d)
-            up_val_1d = self.end_conv(up_val_1d)
-            self._output_cache = up_val_1d
         else:
-            up_val_1d = self.start_conv(inputs[:, :, :, -1:])
-            for convnet in self.dilation_blocks:
-                up_val_1d = convnet(up_val_1d, input_masks)
-            if enc_params['dropout_type'] == "final":
-                up_val_1d = self.final_dropout(up_val_1d)
-            up_val_1d = self.end_conv(up_val_1d)
-            self._output_cache = torch.cat([self._output_cache, up_val_1d], dim=3)
-        return self._output_cache
+            inputs = inputs[:, :, :, -1:]
+
+        up_val_1d = self.start_conv(inputs)
+        for convnet in self.dilation_blocks:
+            up_val_1d = convnet(up_val_1d, input_masks)
+        if enc_params['dropout_loc'] == "final":
+            up_val_1d = self.final_dropout(up_val_1d)
+        up_val_1d = self.end_conv(up_val_1d)
+        return up_val_1d
 
     @staticmethod
     def reconstruction_loss(seq_logits, target_seqs, mask):
@@ -417,8 +416,9 @@ class AutoregressiveVAE(nn.Module):
                 "embedding_nnet_nonlinearity": "elu",
                 "embedding_nnet_size": 200,
                 "latent_size": 30,
-                "dropout_p": 0.3,
-                "config": "original",
+                "dropout_p": 0.0,
+                "dropout_type": "2D",
+                "config": "updated",
             },
             "decoder": {
                 "channels": 48,
@@ -429,10 +429,11 @@ class AutoregressiveVAE(nn.Module):
                 "transformer": False,
                 "inverse_temperature": False,
                 "positional_embedding": True,
-                "skip_connections": False,
+                "skip_connections": False,  # TODO test effect of skip connections
                 "pos_emb_max_len": 400,
                 "pos_emb_step": 5,
-                "config": "original",
+                "config": "updated",
+                "dropout_type": "2D",
                 "dropout_p": 0.5,
             },
             "sampler_hyperparams": {
@@ -461,7 +462,7 @@ class AutoregressiveVAE(nn.Module):
         if channels is not None:
             self.hyperparams['encoder']['channels'] = channels
         if dropout_p is not None:
-            self.hyperparams['encoder']['dropout_p'] = dropout_p
+            self.hyperparams['decoder']['dropout_p'] = dropout_p
         if r_seed is not None:
             self.hyperparams['random_seed'] = r_seed
 
@@ -483,6 +484,7 @@ class AutoregressiveVAE(nn.Module):
                 channels=enc_params['channels'],
                 layers=enc_params['num_layers'],
                 dropout_p=enc_params['dropout_p'],
+                dropout_type=enc_params['dropout_type'],
                 causal=False,
                 config=enc_params['config'],
                 dilation_schedule=enc_params['dilation_schedule'],
@@ -532,6 +534,7 @@ class AutoregressiveVAE(nn.Module):
                 add_input_channels=enc_params['channels'] if dec_params['skip_connections'] else 0,
                 add_input_layer='all' if dec_params['skip_connections'] else None,
                 dropout_p=dec_params['dropout_p'],
+                dropout_type=dec_params['dropout_type'],
                 causal=True,
                 config=dec_params['config'],
                 dilation_schedule=dec_params['dilation_schedule'],
@@ -651,14 +654,14 @@ class AutoregressiveVAE(nn.Module):
 
     def encode(self, inputs, input_masks):
         enc_params = self.hyperparams['encoder']
+        nonlin = nonlinearity(enc_params['embedding_nnet_nonlinearity'])
 
         up_val_1d = self.encoder.start_conv(inputs)  # TODO use special input for encoder
         for convnet in self.encoder.dilation_blocks:
             up_val_1d = convnet(up_val_1d, input_masks)
 
-        nonlin = nonlinearity(enc_params['embedding_nnet_nonlinearity'])
         up_val_1d = up_val_1d * input_masks
-        up_val_mu_logsigma_2d = up_val_1d.sum(dim=[2, 3]) / input_masks.sum(dim=[2, 3])  # TODO global max pooling?
+        up_val_mu_logsigma_2d = up_val_1d.sum(dim=[2, 3]) / input_masks.sum(dim=[2, 3])
 
         up_val_mu_2d = nonlin(self.encoder.emb_mu_one(up_val_mu_logsigma_2d))
         up_val_log_sigma_2d = nonlin(self.encoder.emb_log_sigma_one(up_val_mu_logsigma_2d))

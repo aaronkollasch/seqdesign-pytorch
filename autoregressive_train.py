@@ -12,6 +12,7 @@ from model_logging import Logger
 
 class AutoregressiveTrainer:
     default_params = {
+            'optimizer': 'Adam',
             'lr': 0.001,
             'weight_decay': 0,
             'clip': 100.0,
@@ -24,7 +25,7 @@ class AutoregressiveTrainer:
             self,
             model,
             data_loader,
-            optimizer=optim.Adam,
+            optimizer=None,
             params=None,
             lr=None,
             weight_decay=None,
@@ -39,6 +40,8 @@ class AutoregressiveTrainer:
         self.params = self.default_params.copy()
         if params is not None:
             self.params.update(params)
+        if optimizer is not None:
+            self.params['optimizer'] = optimizer
         if lr is not None:
             self.params['lr'] = lr
         if weight_decay is not None:
@@ -58,7 +61,7 @@ class AutoregressiveTrainer:
         self.loader = data_loader
 
         self.run_fr = 'fr' in model.model_type
-        self.optimizer_type = optimizer
+        self.optimizer_type = getattr(optim, self.params['optimizer'])
         self.logger = logger
         self.logger.trainer = self
         self.device = device
@@ -249,12 +252,15 @@ class AutoregressiveTrainer:
             )
             f.write(snapshot_exec)
 
-    def load_state(self, f_path, map_location=None):
-        checkpoint = torch.load(f_path, map_location=map_location)
+    def load_state(self, checkpoint, map_location=None):
+        if not isinstance(checkpoint, dict):
+            checkpoint = torch.load(checkpoint, map_location=map_location)
         if self.model.model_type != checkpoint['model_type']:
             print("Warning: model type mismatch: loaded type {} for model type {}".format(
                 checkpoint['model_type'], self.model.model_type
             ))
+        if self.model.hyperparams != checkpoint['model_hyperparams']:
+            print("Warning: model hyperparameter mismatch")
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.model.step = checkpoint['step']
@@ -263,6 +269,7 @@ class AutoregressiveTrainer:
 
 class AutoregressiveVAETrainer(AutoregressiveTrainer):
     default_params = {
+        'optimizer': 'Adam',
         'lr': 0.001,
         'weight_decay': 0,
         'clip': 100.0,
@@ -279,7 +286,7 @@ class AutoregressiveVAETrainer(AutoregressiveTrainer):
             self,
             model,
             data_loader,
-            optimizer=optim.Adam,
+            optimizer=None,
             params=None,
             lr=None,
             weight_decay=None,

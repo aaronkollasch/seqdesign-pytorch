@@ -65,12 +65,22 @@ loader = data_loaders.GeneratorDataLoader(
 )
 print("Read in test data")
 
-print("Initializing variables")
+print("Initializing and loading variables")
 if args.from_tf:
-    hyperparams = {'encoder': {'dilation_schedule': [1, 2, 4, 8, 16, 32, 64, 128, 200]}}
+    hyperparams = {'encoder': {'dilation_schedule': [1, 2, 4, 8, 16, 32, 64, 128, 200],
+                               "config": "original",
+                               'dropout_type': 'independent'}}
+    model = autoregressive_model.AutoregressiveFR(
+        channels=args.channels, dropout_p=args.dropout_p, hyperparams=hyperparams)
+    reader = TFReader(os.path.join('../snapshots', args.restore))
+    reader.load_autoregressive_fr(model)
 else:
-    hyperparams = None
-model = autoregressive_model.AutoregressiveFR(channels=args.channels, dropout_p=args.dropout_p, hyperparams=hyperparams)
+    checkpoint = torch.load(os.path.join('../snapshots', args.restore), map_location='cpu')
+    dims = checkpoint['model_dims']
+    hyperparams = checkpoint['model_hyperparams']
+    model = autoregressive_model.AutoregressiveFR(dims=dims, hyperparams=hyperparams, dropout_p=args.dropout_p)
+    model.load_state_dict(checkpoint['model_state_dict'])
+model.to(device)
 print("Num parameters:", model.parameter_count())
 
 trainer = autoregressive_train.AutoregressiveTrainer(
@@ -78,16 +88,6 @@ trainer = autoregressive_train.AutoregressiveTrainer(
     data_loader=None,
     device=device,
 )
-
-if args.from_tf:
-    reader = TFReader(os.path.join('../snapshots', args.restore))
-    reader.load_autoregressive_fr(model)
-else:
-    checkpoint = torch.load(os.path.join('../snapshots', args.restore), map_location='cpu')
-    model.load_state_dict(checkpoint['model_state_dict'])
-model.to(device)
-print("Loaded parameters")
-
 output = trainer.test(loader, model_eval=False, num_samples=args.num_samples)
 output = pd.DataFrame(output, columns=output.keys())
 output.to_csv(args.output, index=False)
