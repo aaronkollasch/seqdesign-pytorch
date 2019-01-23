@@ -6,7 +6,7 @@ from torch.nn.parameter import Parameter
 from functions import normalize, l2_norm_except_dim
 
 
-class HyperparameterError(Exception):
+class HyperparameterError(ValueError):
     pass
 
 
@@ -82,6 +82,8 @@ class Conv2d(nn.Module):
         self.causal = causal
         self.activation = activation
 
+        self._weight = None
+
         self.padding = tuple(d * (w-1)//2 for w, d in zip(kernel_width, dilation))
 
         self.bias = Parameter(torch.Tensor(out_channels))
@@ -113,6 +115,10 @@ class Conv2d(nn.Module):
         nn.init.constant_(self.weight_g, val=g_init)
         nn.init.constant_(self.bias, val=bias_init)
 
+    def generate(self, mode=False):
+        self._weight = None
+        return self
+
     def weight_costs(self):
         return (
             self.weight_v.pow(2).sum(),
@@ -134,6 +140,26 @@ class Conv2d(nn.Module):
         if self.activation is not None:
             h = self.activation(h)
         return h
+
+    def forward_at_end(self, inputs):
+        """Calculates forward for the last position in `inputs`
+        Only implemented for kernel widths (1, 1) and (1, 3) and stride (1, 1).
+        If the kernel width is (1, 3), causal must be True.
+
+        :param inputs: tensor(N, C_in, 1, W)
+        :return: tensor(N, C_out)
+        """
+        if self._weight is None:
+            shape = (self.out_channels, 1, 1, 1)
+            self._weight = l2_norm_except_dim(self.weight_v, 0) * self.weight_g.view(shape)
+            self._weight = self._weight.transpose(0, 1)
+        if self.kernel_width == (1, 1):
+            return inputs[:, :, 0, -1] @ self._weight[:, :, 0, 0] + self.bias.view(1, self.out_channels)
+        elif self.kernel_width == (1, 3):
+            output = inputs[:, :, 0, -1] @ self._weight[:, :, 0, 1]
+            if self.dilation[1] < inputs.size(3):
+                output += inputs[:, :, 0, inputs.size(3) - self.dilation[1] - 1] @ self._weight[:, :, 0, 0]
+            return output + self.bias.view(1, self.out_channels)
 
     def extra_repr(self):
         s = '{in_channels}, {out_channels}, kernel_size={kernel_width}'
@@ -170,6 +196,11 @@ class ConvNet1DLayer(nn.Module):
         self.nonlinearity = nonlinearity
         self.config = config
 
+        self.generating = False
+        self.generating_reset = False
+        self._dilated_conv_input = None
+        self._output_cache = None
+
         if config not in self.configurations:
             raise HyperparameterError(f"Unknown configuration: '{config}'. Accepts {self.configurations}")
 
@@ -197,6 +228,31 @@ class ConvNet1DLayer(nn.Module):
 
         self.dropout = nn.Dropout(p=dropout_p)
 
+        if self.config == 'original':
+            self.operations = [
+                self.layernorm_1, self.mix_conv_1, self.nonlinearity,
+                self.dilated_conv, self.nonlinearity,
+                self.mix_conv_3, self.nonlinearity,
+                self.dropout, self.layernorm_2
+            ]
+        elif self.config == 'standard':
+            self.operations = [
+                self.layernorm_1, self.nonlinearity, self.mix_conv_1,
+                self.layernorm_2, self.nonlinearity, self.dilated_conv,
+                self.layernorm_3, self.nonlinearity, self.mix_conv_3,
+                self.dropout,
+            ]
+
+    def generate(self, mode=False):
+        self.generating = mode
+        self.generating_reset = True
+        self._dilated_conv_input = None
+        self._output_cache = None
+        for module in self.children():
+            if hasattr(module, "generate") and callable(module.generate):
+                module.generate(mode)
+        return self
+
     def weight_costs(self):
         return (
             self.mix_conv_1.weight_costs() +
@@ -211,41 +267,50 @@ class ConvNet1DLayer(nn.Module):
         :param additional_input: Tensor(N, C_add, 1, L)
         :return: Tensor(N, C, 1, L)
         """
+        if self.generating:
+            return self.forward_at_end(inputs, input_masks, additional_input)
         if self.add_input_channels is not None:
-            delta_layer = torch.cat([inputs, self.additional_input], dim=1)
+            delta_layer = torch.cat([inputs, additional_input], dim=1)
         else:
             delta_layer = inputs
 
-        if self.config == 'original':
-            delta_layer = self.layernorm_1(delta_layer)
-            delta_layer = self.mix_conv_1(delta_layer)
-            delta_layer = self.nonlinearity(delta_layer)
-
-            delta_layer = self.dilated_conv(delta_layer)
-            delta_layer = self.nonlinearity(delta_layer)
-
-            delta_layer = self.mix_conv_3(delta_layer)
-            delta_layer = self.nonlinearity(delta_layer)
-
-            delta_layer = self.dropout(delta_layer)
-            delta_layer = self.layernorm_2(delta_layer)
-
-        elif self.config == 'standard':
-            delta_layer = self.layernorm_1(delta_layer)
-            delta_layer = self.nonlinearity(delta_layer)
-            delta_layer = self.mix_conv_1(delta_layer)
-
-            delta_layer = self.layernorm_2(delta_layer)
-            delta_layer = self.nonlinearity(delta_layer)
-            delta_layer = self.dilated_conv(delta_layer)
-
-            delta_layer = self.layernorm_3(delta_layer)
-            delta_layer = self.nonlinearity(delta_layer)
-            delta_layer = self.mix_conv_3(delta_layer)
-
-            delta_layer = self.dropout(delta_layer)
+        for op in self.operations:
+            delta_layer = op(delta_layer)
 
         return delta_layer
+
+    def forward_at_end(self, inputs, input_masks, additional_input=None):
+        """
+        :param inputs: Tensor(N, C, 1, L) initialization, or Tensor(N, C, 1, 1) afterwards
+        :param input_masks: Tensor(N, 1, 1, >=L)
+        :param additional_input: Tensor(N, C_add, 1, >=L)
+        :return: Tensor(N, C, 1, L)
+        """
+        if self.add_input_channels is not None:
+            delta_layer = torch.cat([inputs, additional_input[:, :, :, 0:inputs.size(3)]], dim=1)
+        else:
+            delta_layer = inputs
+
+        if self.generating_reset:
+            self.generating_reset = False
+            for op in self.operations:
+                if op is self.dilated_conv:
+                    self._dilated_conv_input = delta_layer
+                delta_layer = op(delta_layer)
+            # self._output_cache = delta_layer
+        else:
+            delta_layer = delta_layer[:, :, 0:1, -1:]
+            for op in self.operations:
+                if op is self.dilated_conv:
+                    self._dilated_conv_input = torch.cat([self._dilated_conv_input, delta_layer], dim=3)
+                    delta_layer[:, :, 0, 0] = op.forward_at_end(self._dilated_conv_input)
+                elif isinstance(op, Conv2d):
+                    delta_layer[:, :, 0, 0] = op.forward_at_end(delta_layer)
+                else:
+                    delta_layer = op(delta_layer)
+            # self._output_cache = torch.cat([self._output_cache, delta_layer], dim=3)
+
+        return delta_layer  # self._output_cache
 
     def extra_repr(self):
         return '{channels}, dilation={dilation}, causal={causal}, config={config}, ' \
@@ -279,6 +344,10 @@ class ConvNet1D(nn.Module):
         self.add_input_layer = add_input_layer
         self.config = config
 
+        self.generating = False
+        self.generating_reset = True
+        self._output_cache = None
+
         if add_input_layer is not None and add_input_layer not in self.additional_input_layers:
             raise HyperparameterError(f"Unknown additional input layer: '{add_input_layer}'. "
                                       f"Accepts {self.additional_input_layers}")
@@ -305,6 +374,15 @@ class ConvNet1D(nn.Module):
         else:
             self.receptive_field = 2 ** layers - 1
 
+    def generate(self, mode=False):
+        self.generating = mode
+        self.generating_reset = True
+        self._output_cache = None
+        for module in self.dilation_layers:
+            if hasattr(module, "generate") and callable(module.generate):
+                module.generate(mode)
+        return self
+
     def weight_costs(self):
         return [cost for layer in self.dilation_layers for cost in layer.weight_costs()]
 
@@ -315,6 +393,9 @@ class ConvNet1D(nn.Module):
         :param additional_input: Tensor(N, C_add, 1, L)
         :return: Tensor(N, C, 1, L)
         """
+        if self.generating:
+            # return self.forward_at_end(inputs, input_masks, additional_input)
+            pass
         up_layer = inputs
 
         for layer, dilation in enumerate(self.dilations):
@@ -326,6 +407,37 @@ class ConvNet1D(nn.Module):
             up_layer = up_layer + delta_layer
 
         return up_layer
+
+    def forward_at_end(self, inputs, input_masks, additional_input=None):
+        """
+        :param inputs: Tensor(N, C, 1, L)
+        :param input_masks: Tensor(N, 1, 1, >=L)
+        :param additional_input: Tensor(N, C_add, 1, >=L)
+        :return: Tensor(N, C, 1, L)
+        """
+        if self.generating_reset:
+            self.generating_reset = False
+            up_layer = inputs
+            for layer, dilation in enumerate(self.dilations):
+                add_input = None
+                if self.add_input_layer == 'all' or (self.add_input_layer == 'first' and layer == 0):
+                    add_input = additional_input
+
+                delta_layer = self.dilation_layers[layer](up_layer, input_masks, add_input)
+                up_layer = up_layer + delta_layer
+            # self._output_cache = up_layer
+        else:
+            up_layer = inputs[:, :, :, -1:]
+
+            for layer, dilation in enumerate(self.dilations):
+                add_input = None
+                if self.add_input_layer == 'all' or (self.add_input_layer == 'first' and layer == 0):
+                    add_input = additional_input[:, :, :, inputs.size(3)-1:inputs.size(3)]
+
+                delta_layer = self.dilation_layers[layer](up_layer, input_masks, add_input)
+                up_layer = up_layer + delta_layer
+            # self._output_cache = torch.cat([self._output_cache, up_layer], dim=3)
+        return up_layer  # self._output_cache
 
     def extra_repr(self):
         return '{channels}, layers={num_layers}, causal={causal}, config={config}, ' \

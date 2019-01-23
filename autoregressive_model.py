@@ -119,6 +119,10 @@ class Autoregressive(nn.Module):
         self.step = 0
         self.image_summaries = {}
 
+        self.generating = False
+        self.generating_reset = True
+        self._output_cache = None
+
     @staticmethod
     def _log_gaussian(z, prior_mu, prior_sigma):
         prior = dist.Normal(prior_mu, prior_sigma)
@@ -141,6 +145,15 @@ class Autoregressive(nn.Module):
         gauss_two = self._log_gaussian(z, mu_two, sigma_two)
         return (p * gauss_one) + ((1. - p) * gauss_two)
 
+    def generate(self, mode=False):
+        self.generating = mode
+        self.generating_reset = True
+        self._output_cache = None
+        for module in self.dilation_blocks:
+            if hasattr(module, "generate") and callable(module.generate):
+                module.generate(mode)
+        return self
+
     def weight_costs(self):
         return (
             self.start_conv.weight_costs() +
@@ -157,6 +170,9 @@ class Autoregressive(nn.Module):
         :param input_masks: (N, 1, 1, L)
         :return:
         """
+        if self.generating:
+            return self.forward_at_end(inputs, input_masks)
+            # pass
         enc_params = self.hyperparams['encoder']
 
         up_val_1d = self.start_conv(inputs)
@@ -167,6 +183,33 @@ class Autoregressive(nn.Module):
             up_val_1d = self.final_dropout(up_val_1d)
         up_val_1d = self.end_conv(up_val_1d)
         return up_val_1d
+
+    def forward_at_end(self, inputs, input_masks):
+        """
+        :param inputs:
+        :param input_masks:
+        :return:
+        """
+        enc_params = self.hyperparams['encoder']
+
+        if self.generating_reset:
+            self.generating_reset = False
+            up_val_1d = self.start_conv(inputs)
+            for convnet in self.dilation_blocks:
+                up_val_1d = convnet(up_val_1d, input_masks)
+            if enc_params['dropout_type'] == "final":
+                up_val_1d = self.final_dropout(up_val_1d)
+            up_val_1d = self.end_conv(up_val_1d)
+            self._output_cache = up_val_1d
+        else:
+            up_val_1d = self.start_conv(inputs[:, :, :, -1:])
+            for convnet in self.dilation_blocks:
+                up_val_1d = convnet(up_val_1d, input_masks)
+            if enc_params['dropout_type'] == "final":
+                up_val_1d = self.final_dropout(up_val_1d)
+            up_val_1d = self.end_conv(up_val_1d)
+            self._output_cache = torch.cat([self._output_cache, up_val_1d], dim=3)
+        return self._output_cache
 
     @staticmethod
     def reconstruction_loss(seq_logits, target_seqs, mask):
@@ -301,6 +344,12 @@ class AutoregressiveFR(nn.Module):
             img_summaries[key + '_r'] = img_summaries_r[key]
         return img_summaries
 
+    def generate(self, mode=False):
+        for module in self.model.children():
+            if hasattr(module, "generate") and callable(module.generate):
+                module.generate(mode)
+        return self
+
     def weight_costs(self):
         return tuple(cost for model in self.model.children() for cost in model.weight_costs())
 
@@ -380,6 +429,7 @@ class AutoregressiveVAE(nn.Module):
                 "transformer": False,
                 "inverse_temperature": False,
                 "positional_embedding": True,
+                "skip_connections": False,
                 "pos_emb_max_len": 400,
                 "pos_emb_step": 5,
                 "config": "original",
@@ -445,7 +495,7 @@ class AutoregressiveVAE(nn.Module):
         self.encoder.emb_mu_out = nn.Linear(enc_params['embedding_nnet_size'], enc_params['latent_size'])
         self.encoder.emb_log_sigma_out = nn.Linear(enc_params['embedding_nnet_size'], enc_params['latent_size'])
         # TODO try adding flow
-        4
+
         # initialize decoder
         dec_params = self.hyperparams['decoder']
         nonlin = nonlinearity(dec_params['nonlinearity'])
@@ -479,6 +529,8 @@ class AutoregressiveVAE(nn.Module):
             self.decoder.dilation_blocks.append(layers.ConvNet1D(
                 channels=dec_params['channels'],
                 layers=dec_params['num_layers'],
+                add_input_channels=enc_params['channels'] if dec_params['skip_connections'] else 0,
+                add_input_layer='all' if dec_params['skip_connections'] else None,
                 dropout_p=dec_params['dropout_p'],
                 causal=True,
                 config=dec_params['config'],
@@ -558,7 +610,7 @@ class AutoregressiveVAE(nn.Module):
         if annealing_type == "linear":
             return min(step / warm_up, 1.)
         elif annealing_type == "piecewise_linear":
-            return min(torch.sigmoid(torch.tensor(step-warm_up).float()).item() * ((step-warm_up)/warm_up), 1.)
+            return max(0., min(torch.sigmoid(torch.tensor(step-warm_up).float()).item() * ((step-warm_up)/warm_up), 1.))
         elif annealing_type == "sigmoid":
             slope = self.hyperparams["sampler_hyperparams"]["sigmoid_slope"]
             return torch.sigmoid(torch.tensor(slope * (step - warm_up))).item()
@@ -569,7 +621,7 @@ class AutoregressiveVAE(nn.Module):
         if annealing_type == "linear":
             return min(step / warm_up, 1.)
         elif annealing_type == "piecewise_linear":
-            return min(torch.sigmoid(torch.tensor(step-warm_up).float()).item() * ((step-warm_up)/warm_up), 1.)
+            return max(0., min(torch.sigmoid(torch.tensor(step-warm_up).float()).item() * ((step-warm_up)/warm_up), 1.))
         elif annealing_type == "sigmoid":
             slope = self.hyperparams["embedding_hyperparams"]["sigmoid_slope"]
             return torch.sigmoid(torch.tensor(slope * (step-warm_up))).item()
@@ -580,6 +632,12 @@ class AutoregressiveVAE(nn.Module):
         # return dist.Normal(mu, log_sigma.exp() * stddev).rsample()
         eps = torch.zeros_like(log_sigma).normal_(std=stddev)
         return mu + log_sigma.exp() * eps
+
+    def generate(self, mode=False):
+        for module in self.decoder.dilation_blocks():
+            if hasattr(module, "generate") and callable(module.generate):
+                module.generate(mode)
+        return self
 
     def weight_costs(self):
         return (
@@ -630,7 +688,7 @@ class AutoregressiveVAE(nn.Module):
 
         up_val_1d = self.decoder.start_conv(input_1d)
         for convnet in self.decoder.dilation_blocks:
-            up_val_1d = convnet(up_val_1d, input_masks)
+            up_val_1d = convnet(up_val_1d, input_masks, additional_input=z)
         self.image_summaries['LayerFeatures'] = dict(img=up_val_1d.permute(0, 1, 3, 2).detach(), max_outputs=3)
 
         up_val_1d = self.decoder.end_conv(up_val_1d)

@@ -267,6 +267,7 @@ class AutoregressiveVAETrainer(AutoregressiveTrainer):
         'weight_decay': 0,
         'clip': 100.0,
         'lagging_inference': True,
+        'lag_inf_aggressive': True,
         'lag_inf_convergence': True,
         'lag_inf_inner_loop_max_steps': 100,
         'snapshot_path': None,
@@ -305,8 +306,6 @@ class AutoregressiveVAETrainer(AutoregressiveTrainer):
             params=self.model.decoder_parameters(),
             lr=self.params['lr'], weight_decay=self.params['weight_decay'])
 
-        self.aggressive = True
-
     def train(self, steps=1e8):
         self.model.train()
         device = self.device
@@ -329,7 +328,7 @@ class AutoregressiveVAETrainer(AutoregressiveTrainer):
                 batch[key] = batch[key].to(device, non_blocking=True)
             data_load_time = time.time()-start
 
-            if params['lagging_inference'] and self.aggressive:
+            if params['lagging_inference'] and params['lag_inf_aggressive']:
                 self.model.enable_gradient = 'e'
 
                 # lagging inference variables
@@ -433,8 +432,8 @@ class AutoregressiveVAETrainer(AutoregressiveTrainer):
                 self.model.train()
                 print(f"epoch: {epoch}, active units: {au}f {au_r}r")
                 print(f"pre mi: {pre_mi:.4f}, cur mi: {cur_mi:.4f}")
-                if self.aggressive and cur_mi < pre_mi:
-                    self.aggressive = False
+                if params['lag_inf_aggressive'] and cur_mi < pre_mi:
+                    params['lag_inf_aggressive'] = False
                     print("STOP BURNING")
                 pre_mi = cur_mi
 

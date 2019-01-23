@@ -29,6 +29,8 @@ parser.add_argument("--r-seed", type=int, default=42,
                     help="Random seed")
 parser.add_argument("--no-lag-inf", action='store_true',
                     help="Disable lagging inference")
+parser.add_argument("--lag-inf-max-steps", type=int, default=None,
+                    help="Disable lagging inference")
 parser.add_argument("--no-cuda", action='store_true',
                     help="Disable GPU training")
 args = parser.parse_args()
@@ -128,6 +130,8 @@ if args.restore is not None:
     trainer.load_state(args.restore)
 if args.no_lag_inf:
     trainer.params['lagging_inference'] = False
+if args.lag_inf_max_steps is not None:
+    trainer.params['lag_inf_inner_loop_max_steps'] = args.lag_inf_max_steps
 print("Num parameters:", model.parameter_count())
 
 trainer.train(steps=num_iterations)
