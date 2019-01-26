@@ -3,6 +3,7 @@ import sys
 import subprocess
 import glob
 import collections
+import shutil
 
 import torch
 
@@ -40,19 +41,19 @@ def get_gpu_name():
         print(e)
 
 
+def get_cuda_path():
+    nvcc_path = shutil.which('nvcc')
+    if nvcc_path is not None:
+        return nvcc_path.replace('bin/nvcc', '')
+    else:
+        return None
+
+
 # https://github.com/ilkarman/DeepLearningFrameworks/blob/master/notebooks/common/utils.py
 def get_cuda_version():
     """Get CUDA version"""
-    if sys.platform == 'win32':
-        raise NotImplementedError("Implement this!")
-        # This breaks on linux:
-        # cuda=!ls "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
-        # path = "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\" + str(cuda[0]) +"\\version.txt"
-    elif sys.platform == 'linux' or sys.platform == 'darwin':
-        path = '/usr/local/cuda/version.txt'
-    else:
-        raise ValueError("Not in Windows, Linux or Mac")
-    if os.path.isfile(path):
+    path = get_cuda_path() + 'version.txt'
+    if path is not None and os.path.isfile(path):
         with open(path, 'r') as f:
             data = f.read().replace('\n', '')
         return data
@@ -77,6 +78,9 @@ def get_cudnn_version():
                       '/usr/include/cudnn.h']
     else:
         raise ValueError("Not in Windows, Linux or Mac")
+    cuda_path = get_cuda_path()
+    if cuda_path is not None:
+        candidates.append(cuda_path + 'include/cudnn.h')
     file = None
     for c in candidates:
         file = glob.glob(c)
