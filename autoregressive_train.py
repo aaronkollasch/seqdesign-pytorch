@@ -431,7 +431,7 @@ class AutoregressiveVAETrainer(AutoregressiveTrainer):
             if 'd' in self.model.enable_gradient:
                 self.dec_optimizer.step()
 
-            if step % self.loader.dataset.n_eff == 0:
+            if step % self.loader.dataset.n_eff < 1:
                 self.model.eval()
                 with torch.no_grad():
                     cur_mi = calc_mi(self.model, test_batch, run_fr=self.run_fr, device=self.device)

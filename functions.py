@@ -6,7 +6,7 @@ import torch.autograd as autograd
 
 
 def gelu(x):
-    """Implementation of the gelu activation function.
+    """BERT's implementation of the gelu activation function.
         For information: OpenAI GPT's gelu is slightly different (and gives slightly different results):
         0.5 * x * (1 + torch.tanh(math.sqrt(2 / math.pi) * (x + 0.044715 * torch.pow(x, 3))))
     """

@@ -2,6 +2,7 @@
 import sys
 import argparse
 import time
+import json
 
 import numpy as np
 import torch
@@ -140,6 +141,9 @@ trainer = autoregressive_train.AutoregressiveTrainer(
 )
 if args.restore is not None:
     trainer.load_state(checkpoint)
-print("Num parameters:", model.parameter_count())
+
+print("Hyperparameters:", json.dumps(model.hyperparams, indent=4))
+print("Training parameters:", json.dumps(trainer.params, indent=4))
+print("Num trainable parameters:", model.parameter_count())
 
 trainer.train(steps=num_iterations)

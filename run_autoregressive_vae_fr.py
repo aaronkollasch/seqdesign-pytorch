@@ -2,6 +2,7 @@
 import sys
 import argparse
 import time
+import json
 
 import numpy as np
 import torch
@@ -10,6 +11,7 @@ import data_loaders
 import autoregressive_model
 import autoregressive_train
 import model_logging
+from utils import get_cuda_version, get_cudnn_version
 
 working_dir = '/n/groups/marks/users/aaron/autoregressive'
 data_dir = '/n/groups/marks/projects/autoregressive'
@@ -80,6 +82,8 @@ if device.type == 'cuda':
     print('Memory Usage:')
     print('Allocated:', round(torch.cuda.memory_allocated(0)/1024**3, 1), 'GB')
     print('Cached:   ', round(torch.cuda.memory_cached(0)/1024**3, 1), 'GB')
+    print(get_cuda_version())
+    print("CuDNN Version ", get_cudnn_version())
 print()
 
 print("Run:", run_name)
@@ -145,6 +149,9 @@ if args.no_lag_inf:
     trainer.params['lagging_inference'] = False
 if args.lag_inf_max_steps is not None:
     trainer.params['lag_inf_inner_loop_max_steps'] = args.lag_inf_max_steps
-print("Num parameters:", model.parameter_count())
+
+print("Hyperparameters:", json.dumps(model.hyperparams, indent=4))
+print("Training parameters:", json.dumps(trainer.params, indent=4))
+print("Num trainable parameters:", model.parameter_count())
 
 trainer.train(steps=num_iterations)

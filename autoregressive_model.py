@@ -1,4 +1,5 @@
 import math
+import itertools
 
 import torch
 import torch.nn as nn
@@ -45,10 +46,10 @@ class Autoregressive(nn.Module):
                 "dilation_schedule": None,
                 "transformer": False,  # TODO transformer
                 "inverse_temperature": False,
-                "dropout_loc": "inter",  # options = "final", "inter", "gaussian"  # TODO what is gaussian?
-                "dropout_p": 0.5,  # probability of zeroing out value
-                "dropout_type": "2D",
-                "config": "updated",  # options = "original", "updated", "standard"
+                "dropout_loc": "inter",  # options = "final", "inter", "gaussian"
+                "dropout_p": 0.5,  # probability of zeroing out value, not the keep probability
+                "dropout_type": "independent",
+                "config": "original",  # options = "original", "updated", "standard"
             },
             "sampler_hyperparams": {
                 'warm_up': 1,
@@ -80,7 +81,7 @@ class Autoregressive(nn.Module):
         if r_seed is not None:
             self.hyperparams['random_seed'] = r_seed
 
-        # build encoder
+        # initialize encoder modules
         enc_params = self.hyperparams['encoder']
         nonlin = nonlinearity(enc_params['nonlinearity'])
 
@@ -123,7 +124,6 @@ class Autoregressive(nn.Module):
 
         self.generating = False
         self.generating_reset = True
-        self._output_cache = None
 
     @staticmethod
     def _log_gaussian(z, prior_mu, prior_sigma):
@@ -147,11 +147,10 @@ class Autoregressive(nn.Module):
         gauss_two = self._log_gaussian(z, mu_two, sigma_two)
         return (p * gauss_one) + ((1. - p) * gauss_two)
 
-    def generate(self, mode=False):
+    def generate(self, mode=True):
         self.generating = mode
         self.generating_reset = True
-        self._output_cache = None
-        for module in self.dilation_blocks:
+        for module in itertools.chain(self.children(), self.dilation_blocks):
             if hasattr(module, "generate") and callable(module.generate):
                 module.generate(mode)
         return self
@@ -172,39 +171,18 @@ class Autoregressive(nn.Module):
         :param input_masks: (N, 1, 1, L)
         :return:
         """
+        enc_params = self.hyperparams['encoder']
+
         if self.generating:
             if self.generating_reset:
                 self.generating_reset = False
             else:
                 inputs = inputs[:, :, :, -1:]
-            # return self.forward_at_end(inputs, input_masks)
-        enc_params = self.hyperparams['encoder']
 
         up_val_1d = self.start_conv(inputs)
         for convnet in self.dilation_blocks:
             up_val_1d = convnet(up_val_1d, input_masks)
         self.image_summaries['LayerFeatures'] = dict(img=up_val_1d.permute(0, 1, 3, 2).detach(), max_outputs=3)
-        if enc_params['dropout_loc'] == "final":
-            up_val_1d = self.final_dropout(up_val_1d)
-        up_val_1d = self.end_conv(up_val_1d)
-        return up_val_1d
-
-    def forward_at_end(self, inputs, input_masks):
-        """
-        :param inputs:
-        :param input_masks:
-        :return:
-        """
-        enc_params = self.hyperparams['encoder']
-
-        if self.generating_reset:
-            self.generating_reset = False
-        else:
-            inputs = inputs[:, :, :, -1:]
-
-        up_val_1d = self.start_conv(inputs)
-        for convnet in self.dilation_blocks:
-            up_val_1d = convnet(up_val_1d, input_masks)
         if enc_params['dropout_loc'] == "final":
             up_val_1d = self.final_dropout(up_val_1d)
         up_val_1d = self.end_conv(up_val_1d)
@@ -343,7 +321,7 @@ class AutoregressiveFR(nn.Module):
             img_summaries[key + '_r'] = img_summaries_r[key]
         return img_summaries
 
-    def generate(self, mode=False):
+    def generate(self, mode=True):
         for module in self.model.children():
             if hasattr(module, "generate") and callable(module.generate):
                 module.generate(mode)
@@ -416,7 +394,7 @@ class AutoregressiveVAE(nn.Module):
                 "embedding_nnet_nonlinearity": "elu",
                 "embedding_nnet_size": 200,
                 "latent_size": 30,
-                "dropout_p": 0.0,
+                "dropout_p": 0.1,
                 "dropout_type": "2D",
                 "config": "updated",
             },
@@ -466,7 +444,7 @@ class AutoregressiveVAE(nn.Module):
         if r_seed is not None:
             self.hyperparams['random_seed'] = r_seed
 
-        # initialize encoder
+        # initialize encoder modules
         enc_params = self.hyperparams['encoder']
         nonlin = nonlinearity(enc_params['nonlinearity'])
 
@@ -498,7 +476,7 @@ class AutoregressiveVAE(nn.Module):
         self.encoder.emb_log_sigma_out = nn.Linear(enc_params['embedding_nnet_size'], enc_params['latent_size'])
         # TODO try adding flow
 
-        # initialize decoder
+        # initialize decoder modules
         dec_params = self.hyperparams['decoder']
         nonlin = nonlinearity(dec_params['nonlinearity'])
 
@@ -552,7 +530,7 @@ class AutoregressiveVAE(nn.Module):
 
         self.step = 0
         self.forward_state = {'kl_embedding': None}
-        self.image_summaries = {}  # TODO generate and handle summary images
+        self.image_summaries = {}
         self._enable_gradient = 'ed'
 
     @property
@@ -636,7 +614,7 @@ class AutoregressiveVAE(nn.Module):
         eps = torch.zeros_like(log_sigma).normal_(std=stddev)
         return mu + log_sigma.exp() * eps
 
-    def generate(self, mode=False):
+    def generate(self, mode=True):  # TODO implement fast generation
         for module in self.decoder.dilation_blocks():
             if hasattr(module, "generate") and callable(module.generate):
                 module.generate(mode)
