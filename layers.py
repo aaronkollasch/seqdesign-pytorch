@@ -82,7 +82,10 @@ class Conv2d(nn.Module):
         self.causal = causal
         self.activation = activation
 
+        self.generating = False
+        self.generating_reset = True
         self._weight = None
+        self._input_cache = None
 
         self.padding = tuple(d * (w-1)//2 for w, d in zip(kernel_width, dilation))
 
@@ -115,8 +118,11 @@ class Conv2d(nn.Module):
         nn.init.constant_(self.weight_g, val=g_init)
         nn.init.constant_(self.bias, val=bias_init)
 
-    def generate(self, mode=False):
+    def generate(self, mode=True):
+        self.generating = mode
+        self.generating_reset = True
         self._weight = None
+        self._input_cache = None
         return self
 
     def weight_costs(self):
@@ -126,40 +132,57 @@ class Conv2d(nn.Module):
             self.bias.pow(2).sum()
         )
 
+    @property
+    def weight(self):
+        shape = (self.out_channels, 1, 1, 1)
+        weight = l2_norm_except_dim(self.weight_v, 0) * self.weight_g.view(shape)
+        if self.mask is not None:
+            weight = weight * self.mask
+        return weight
+
     def forward(self, inputs):
         """
         :param inputs: (N, C_in, H, W)
         :return: (N, C_out, H, W)
         """
-        shape = (self.out_channels, 1, 1, 1)
-        weight = l2_norm_except_dim(self.weight_v, 0) * self.weight_g.view(shape)
-        if self.mask is not None:
-            weight = weight * self.mask
+        if self.generating:
+            if self.generating_reset:
+                self.generating_reset = False
+                if self.kernel_width != (1, 1):
+                    self._input_cache = inputs
+            else:
+                return self.forward_generate(inputs)
 
-        h = F.conv2d(inputs, weight, bias=self.bias, stride=self.stride, padding=self.padding, dilation=self.dilation)
+        h = F.conv2d(inputs, self.weight, bias=self.bias,
+                     stride=self.stride, padding=self.padding, dilation=self.dilation)
         if self.activation is not None:
             h = self.activation(h)
         return h
 
-    def forward_at_end(self, inputs):
+    def forward_generate(self, inputs):
         """Calculates forward for the last position in `inputs`
         Only implemented for kernel widths (1, 1) and (1, 3) and stride (1, 1).
         If the kernel width is (1, 3), causal must be True.
 
-        :param inputs: tensor(N, C_in, 1, W)
-        :return: tensor(N, C_out)
+        :param inputs: tensor(N, C_in, 1, 1)
+        :return: tensor(N, C_out, 1, 1)
         """
         if self._weight is None:
-            shape = (self.out_channels, 1, 1, 1)
-            self._weight = l2_norm_except_dim(self.weight_v, 0) * self.weight_g.view(shape)
+            self._weight = self.weight
             self._weight = self._weight.transpose(0, 1)
         if self.kernel_width == (1, 1):
-            return inputs[:, :, 0, -1] @ self._weight[:, :, 0, 0] + self.bias.view(1, self.out_channels)
+            h = inputs[:, :, 0, -1] @ self._weight[:, :, 0, 0] + self.bias.view(1, self.out_channels)
         elif self.kernel_width == (1, 3):
-            output = inputs[:, :, 0, -1] @ self._weight[:, :, 0, 1]
-            if self.dilation[1] < inputs.size(3):
-                output += inputs[:, :, 0, inputs.size(3) - self.dilation[1] - 1] @ self._weight[:, :, 0, 0]
-            return output + self.bias.view(1, self.out_channels)
+            h = inputs[:, :, 0, -1] @ self._weight[:, :, 0, 1]
+            if self.dilation[1] < self._input_cache.size(3):
+                h += self._input_cache[:, :, 0, -self.dilation[1]] @ self._weight[:, :, 0, 0]
+            h += self.bias.view(1, self.out_channels)
+            self._input_cache = torch.cat([self._input_cache, inputs], dim=3)
+        else:
+            raise HyperparameterError(f"Generate not supported for kernel width {self.kernel_width}.")
+        if self.activation is not None:
+            h = self.activation(h)
+        return h.unsqueeze(-1).unsqueeze(-1)
 
     def extra_repr(self):
         s = '{in_channels}, {out_channels}, kernel_size={kernel_width}'
@@ -201,7 +224,7 @@ class ConvNet1DLayer(nn.Module):
 
         self.generating = False
         self.generating_reset = False
-        self._dilated_conv_input = None
+        self._dropout2d_mask = None
 
         if config not in self.configurations:
             raise HyperparameterError(f"Unknown configuration: '{config}'. Accepts {self.configurations}")
@@ -257,10 +280,10 @@ class ConvNet1DLayer(nn.Module):
                 self.dropout,
             ]
 
-    def generate(self, mode=False):
+    def generate(self, mode=True):
         self.generating = mode
         self.generating_reset = True
-        self._dilated_conv_input = None
+        self._dropout2d_mask = None
         for module in self.children():
             if hasattr(module, "generate") and callable(module.generate):
                 module.generate(mode)
@@ -281,7 +304,7 @@ class ConvNet1DLayer(nn.Module):
         :return: Tensor(N, C, 1, L)
         """
         if self.generating:
-            return self.forward_at_end(inputs, input_masks, additional_input)
+            return self.forward_generate(inputs, input_masks, additional_input)
         if self.add_input_channels is not None:
             delta_layer = torch.cat([inputs, additional_input], dim=1)
         else:
@@ -292,7 +315,7 @@ class ConvNet1DLayer(nn.Module):
 
         return delta_layer
 
-    def forward_at_end(self, inputs, input_masks, additional_input=None):
+    def forward_generate(self, inputs, input_masks, additional_input=None):
         """
         :param inputs: Tensor(N, C, 1, L) initialization, or Tensor(N, C, 1, 1) afterwards
         :param input_masks: Tensor(N, 1, 1, >=L)
@@ -306,20 +329,15 @@ class ConvNet1DLayer(nn.Module):
 
         if self.generating_reset:
             self.generating_reset = False
-            for op in self.operations:
-                if op is self.dilated_conv:
-                    self._dilated_conv_input = delta_layer
+            if self.training and self.dropout_type == '2D' and self._dropout2d_mask is None:
+                p = 1 - self.dropout_p
+                self._dropout2d_mask = torch.bernoulli(torch.full((1, self.channels, 1, 1), p)) / p
+
+        for op in self.operations:
+            if op is self.dropout and self.training and self.dropout_type == '2D':
+                delta_layer *= self._dropout2d_mask
+            else:
                 delta_layer = op(delta_layer)
-        else:
-            delta_layer = delta_layer[:, :, 0:1, -1:]
-            for op in self.operations:
-                if op is self.dilated_conv:
-                    self._dilated_conv_input = torch.cat([self._dilated_conv_input, delta_layer], dim=3)
-                    delta_layer[:, :, 0, 0] = op.forward_at_end(self._dilated_conv_input)
-                elif isinstance(op, Conv2d):
-                    delta_layer[:, :, 0, 0] = op.forward_at_end(delta_layer)
-                else:
-                    delta_layer = op(delta_layer)
         return delta_layer
 
     def extra_repr(self):
@@ -337,7 +355,7 @@ class ConvNet1D(nn.Module):
             dropout_p=0.5,
             dropout_type='independent',
             causal=True,
-            config='original',  # 'original', 'standard'
+            config='original',
             add_input_channels=None,
             add_input_layer=None,  # 'all', 'first'
             dilation_schedule=None,
@@ -382,7 +400,7 @@ class ConvNet1D(nn.Module):
         else:
             self.receptive_field = 2 ** layers - 1
 
-    def generate(self, mode=False):
+    def generate(self, mode=True):
         for module in self.dilation_layers:
             if hasattr(module, "generate") and callable(module.generate):
                 module.generate(mode)
