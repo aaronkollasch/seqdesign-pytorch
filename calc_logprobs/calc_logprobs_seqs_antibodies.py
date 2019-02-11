@@ -26,6 +26,9 @@ parser.add_argument("--num-samples", type=int, default=1,
                     help="Number of iterations to run the model.")
 parser.add_argument("--batch-size", type=int, default=100,
                     help="Minibatch size for inferring effect prediction.")
+parser.add_argument("--include-vh", action='store_true',
+                    help="Include an encoding of the VH gene in the input. "
+                         "Overridden by checkpoint parameter if set.")
 parser.add_argument("--dropout-p", type=float, default=0.,
                     help="Dropout p while sampling log p(x) (drop rate, not keep rate)")
 parser.add_argument("--num-data-workers", type=int, default=0,
@@ -52,12 +55,13 @@ if device.type == 'cuda':
     print('Cached:   ', round(torch.cuda.memory_cached(0)/1024**3, 1), 'GB')
 print()
 
-dataset = data_loaders.FastaDataset(
+dataset = data_loaders.VHAntibodyFastaDataset(
     batch_size=args.batch_size,
     working_dir='.',
     dataset=args.input,
     matching=True,
     unlimited_epoch=False,
+    include_vh=args.include_vh,
 )
 loader = data_loaders.GeneratorDataLoader(
     dataset,
@@ -68,11 +72,12 @@ print("Read in test data")
 
 print("Initializing and loading variables")
 if args.from_tf:
+    dims = {'input': dataset.input_dim}
     hyperparams = {'encoder': {'dilation_schedule': [1, 2, 4, 8, 16, 32, 64, 128, 200],
                                "config": "original",
                                'dropout_type': 'independent'}}
     model = autoregressive_model.AutoregressiveFR(
-        channels=args.channels, dropout_p=args.dropout_p, hyperparams=hyperparams)
+        channels=args.channels, dropout_p=args.dropout_p, dims=dims, hyperparams=hyperparams)
     reader = TFReader(os.path.join('../snapshots', args.restore))
     reader.load_autoregressive_fr(model)
 else:
@@ -81,6 +86,8 @@ else:
     hyperparams = checkpoint['model_hyperparams']
     model = autoregressive_model.AutoregressiveFR(dims=dims, hyperparams=hyperparams, dropout_p=args.dropout_p)
     model.load_state_dict(checkpoint['model_state_dict'])
+    if 'dataset_params' in checkpoint:
+        dataset.params = checkpoint['dataset_params']
 model.to(device)
 print("Num parameters:", model.parameter_count())
 

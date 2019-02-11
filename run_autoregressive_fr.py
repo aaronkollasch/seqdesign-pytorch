@@ -30,7 +30,7 @@ parser.add_argument("--restore", type=str, default=None,
 parser.add_argument("--r-seed", type=int, default=42,
                     help="Random seed")
 parser.add_argument("--dropout-p", type=float, default=0.5,
-                    help="Dropout probability (p of zeroing an element, not retention)")
+                    help="Dropout probability (drop rate, not keep rate)")
 parser.add_argument("--no-cuda", action='store_true',
                     help="Disable GPU training")
 args = parser.parse_args()
@@ -84,19 +84,8 @@ print()
 
 print("Run:", run_name)
 
-# Variables for runtime modification
-batch_size = 30
-num_iterations = args.num_iterations
-
-plot_train = 100
-dropout_p_train = args.dropout_p
-
-# fitness_check = 2
-# fitness_start = 2
-# num_iterations = 36
-
 dataset = data_loaders.SingleFamilyDataset(
-    batch_size=batch_size,
+    batch_size=args.batch_size,
     working_dir=data_dir,
     dataset=args.dataset,
     matching=True,
@@ -115,11 +104,11 @@ if args.restore is not None:
     dims = checkpoint['model_dims']
     hyperparams = checkpoint['model_hyperparams']
     trainer_params = checkpoint['train_params']
-    model = autoregressive_model.AutoregressiveFR(dims=dims, hyperparams=hyperparams, dropout_p=dropout_p_train)
+    model = autoregressive_model.AutoregressiveFR(dims=dims, hyperparams=hyperparams, dropout_p=args.dropout_p)
 else:
     checkpoint = args.restore
     trainer_params = None
-    model = autoregressive_model.AutoregressiveFR(channels=args.channels, dropout_p=dropout_p_train)
+    model = autoregressive_model.AutoregressiveFR(channels=args.channels, dropout_p=args.dropout_p)
 model.to(device)
 
 trainer = autoregressive_train.AutoregressiveTrainer(
@@ -143,7 +132,8 @@ if args.restore is not None:
     trainer.load_state(checkpoint)
 
 print("Hyperparameters:", json.dumps(model.hyperparams, indent=4))
-print("Training parameters:", json.dumps(trainer.params, indent=4))
+print("Training parameters:", json.dumps(
+    {key: value for key, value in trainer.params.items() if key != 'snapshot_exec_template'}, indent=4))
 print("Num trainable parameters:", model.parameter_count())
 
-trainer.train(steps=num_iterations)
+trainer.train(steps=args.num_iterations)

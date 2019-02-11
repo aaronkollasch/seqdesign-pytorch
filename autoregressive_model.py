@@ -35,6 +35,7 @@ class Autoregressive(nn.Module):
         }
         if dims is not None:
             self.dims.update(dims)
+        self.dims.setdefault('input', self.dims['alphabet'])
 
         self.hyperparams = {
             # For purely dilated conv network
@@ -66,7 +67,7 @@ class Autoregressive(nn.Module):
             "random_seed": 42,
             "optimization": {
                 "l2_regularization": True,
-                "bayesian": False,
+                "bayesian": False,  # TODO implement bayesian
                 "l2_lambda": 1.,
                 "bayesian_logits": False,
                 "mle_logits": False,
@@ -86,7 +87,7 @@ class Autoregressive(nn.Module):
         nonlin = nonlinearity(enc_params['nonlinearity'])
 
         self.start_conv = layers.Conv2d(
-            self.dims['alphabet'],
+            self.dims['input'],
             enc_params['channels'],
             kernel_width=(1, 1),
             activation=None,
@@ -381,6 +382,7 @@ class AutoregressiveVAE(nn.Module):
         }
         if dims is not None:
             self.dims.update(dims)
+        self.dims.setdefault('input', self.dims['alphabet'])
 
         self.hyperparams = {
             "encoder": {
@@ -450,7 +452,7 @@ class AutoregressiveVAE(nn.Module):
 
         self.encoder = nn.ModuleDict()
         self.encoder.start_conv = layers.Conv2d(
-            self.dims['alphabet'],
+            self.dims['input'],
             enc_params['channels'],
             kernel_width=(1, 1),
             activation=nonlin,
@@ -492,7 +494,7 @@ class AutoregressiveVAE(nn.Module):
         self.decoder = nn.ModuleDict()
         self.decoder.start_conv = layers.Conv2d(
             (
-                self.dims['alphabet'] +
+                self.dims['input'] +
                 (
                     dec_params['pos_emb_max_len'] // dec_params['pos_emb_step']
                     if dec_params['positional_embedding'] else 0

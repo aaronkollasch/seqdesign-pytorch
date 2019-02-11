@@ -4,7 +4,9 @@ import subprocess
 import glob
 import collections
 import shutil
+import contextlib
 
+import numpy as np
 import torch
 
 
@@ -28,6 +30,17 @@ def comb_losses(losses_f, losses_r):
             losses_comb[key + '_f'] = losses_f[key]
             losses_comb[key + '_r'] = losses_r[key]
     return losses_comb
+
+
+# https://stackoverflow.com/questions/49555991/can-i-create-a-local-numpy-random-seed
+@contextlib.contextmanager
+def temp_seed(seed):
+    state = np.random.get_state()
+    np.random.seed(seed)
+    try:
+        yield
+    finally:
+        np.random.set_state(state)
 
 
 # https://github.com/ilkarman/DeepLearningFrameworks/blob/master/notebooks/common/utils.py

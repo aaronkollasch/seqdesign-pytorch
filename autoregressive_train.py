@@ -233,6 +233,10 @@ class AutoregressiveTrainer:
     def save_state(self, last_batch=None):
         snapshot = f"{self.params['snapshot_path']}/{self.params['snapshot_name']}_{self.model.step}.pth"
         revive_exec = f"{self.params['snapshot_path']}/revive_executable/{self.params['snapshot_name']}.sh"
+        if not os.path.exists(os.path.dirname(snapshot)):
+            os.makedirs(os.path.dirname(snapshot), exist_ok=True)
+        if not os.path.exists(os.path.dirname(revive_exec)):
+            os.makedirs(os.path.dirname(revive_exec), exist_ok=True)
         torch.save(
             {
                 'step': self.model.step,
@@ -242,6 +246,7 @@ class AutoregressiveTrainer:
                 'model_hyperparams': self.model.hyperparams,
                 'optimizer_state_dict': self.optimizer.state_dict(),
                 'train_params': self.params,
+                'dataset_params': self.loader.dataset.params,
                 'last_batch': last_batch
             },
             snapshot
