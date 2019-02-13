@@ -513,6 +513,7 @@ class VHAntibodyDataset(SequenceDataset):
         input_dim = len(self.alphabet)
         if self.include_vh:
             input_dim += len(self.heavy_to_idx)
+        return input_dim
 
     @property
     def params(self):
@@ -531,6 +532,10 @@ class VHAntibodyDataset(SequenceDataset):
             self.include_vh = d['include_vh']
         if 'vh_set_name' in d:
             self.vh_set_name = d['vh_set_name']
+            if self.vh_set_name == 'IPI':
+                self.vh_list = self.IPI_VH_SEQS.copy()
+            else:
+                self.vh_list = None
         if 'vh_seqs' in d:
             self.vh_list = d['vh_seqs']
 

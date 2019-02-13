@@ -87,7 +87,10 @@ else:
     model = autoregressive_model.AutoregressiveFR(dims=dims, hyperparams=hyperparams, dropout_p=args.dropout_p)
     model.load_state_dict(checkpoint['model_state_dict'])
     if 'dataset_params' in checkpoint:
-        dataset.params = checkpoint['dataset_params']
+        d_params = checkpoint['dataset_params']
+        d_params.pop('batch_size', None)
+        d_params.pop('unlimited_epoch', None)
+        dataset.params = d_params
 model.to(device)
 print("Num parameters:", model.parameter_count())
 

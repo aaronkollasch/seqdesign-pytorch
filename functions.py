@@ -43,6 +43,10 @@ def comb_losses(losses_f, losses_r):
     return losses_comb
 
 
+def clamp(x, min_val=0., max_val=1.):
+    return max(min_val, min(x, max_val))
+
+
 def l2_normalize(w, dim, eps=1e-12):
     """PyTorch implementation of tf.nn.l2_normalize
     """

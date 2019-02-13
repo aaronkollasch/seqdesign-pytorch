@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 import layers
 from utils import recursive_update
-from functions import nonlinearity, comb_losses
+from functions import nonlinearity, comb_losses, clamp
 
 
 class Autoregressive(nn.Module):
@@ -593,7 +593,7 @@ class AutoregressiveVAE(nn.Module):
         if annealing_type == "linear":
             return min(step / warm_up, 1.)
         elif annealing_type == "piecewise_linear":
-            return max(0., min(torch.sigmoid(torch.tensor(step-warm_up).float()).item() * ((step-warm_up)/warm_up), 1.))
+            return clamp(torch.sigmoid(torch.tensor(step-warm_up).float()).item() * ((step-warm_up)/warm_up), 0., 1.)
         elif annealing_type == "sigmoid":
             slope = self.hyperparams["sampler_hyperparams"]["sigmoid_slope"]
             return torch.sigmoid(torch.tensor(slope * (step - warm_up))).item()
@@ -604,7 +604,7 @@ class AutoregressiveVAE(nn.Module):
         if annealing_type == "linear":
             return min(step / warm_up, 1.)
         elif annealing_type == "piecewise_linear":
-            return max(0., min(torch.sigmoid(torch.tensor(step-warm_up).float()).item() * ((step-warm_up)/warm_up), 1.))
+            return clamp(torch.sigmoid(torch.tensor(step-warm_up).float()).item() * ((step-warm_up)/warm_up), 0., 1.)
         elif annealing_type == "sigmoid":
             slope = self.hyperparams["embedding_hyperparams"]["sigmoid_slope"]
             return torch.sigmoid(torch.tensor(slope * (step-warm_up))).item()
