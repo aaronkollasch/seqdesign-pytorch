@@ -1,12 +1,35 @@
 # code referenced from https://github.com/vincentherrmann/pytorch-wavenet/blob/master/model_logging.py
 import threading
 from io import BytesIO
+import time
 
 import tensorflow as tf
 import numpy as np
 from PIL import Image
 import torch
-import time
+
+
+class Accumulator:
+    def __init__(self, *keys):
+        self._values = {key: 0. for key in keys}
+        self.log_interval = 0
+
+    def update(self, **kwargs):
+        for key in kwargs:
+            self._values[key] += kwargs[key]
+        self.log_interval += 1
+
+    def reset(self):
+        for key in self._values:
+            self._values[key] = 0.
+        self.log_interval = 0
+
+    @property
+    def values(self):
+        return {key: value / self.log_interval for key, value in self._values.items()}
+
+    def __getattr__(self, item):
+        return self._values[item] / self.log_interval
 
 
 class Logger:
@@ -14,47 +37,45 @@ class Logger:
                  log_interval=50,
                  validation_interval=200,
                  generate_interval=500,
+                 info_interval=1000,
                  trainer=None,
                  generate_function=None):
         self.trainer = trainer
         self.log_interval = log_interval
         self.val_interval = validation_interval
         self.gen_interval = generate_interval
+        self.info_interval = info_interval
         self.log_time = time.time()
-        self.accumulated_loss = 0
-        self.accumulated_ce_loss = 0
-        self.accumulated_bitperchar = 0
-        self.accumulated_loadtime = 0.
+        self.accumulator = Accumulator('loss', 'ce_loss', 'bitperchar', 'load_time')
         self.generate_function = generate_function
         if self.generate_function is not None:
             self.generate_thread = threading.Thread(target=self.generate_function)
             self.generate_function.daemon = True
 
     def log(self, current_step, current_losses, current_grad_norm, load_time=0.):
-        self.accumulated_loss += float(current_losses['loss'].detach())
-        self.accumulated_ce_loss += float(current_losses['ce_loss'].detach())
-        if 'bitperchar' in current_losses:
-            self.accumulated_bitperchar += float(current_losses['bitperchar'].detach())
-        self.accumulated_loadtime += load_time
+        self.accumulator.update(
+            loss=float(current_losses['loss'].detach()),
+            ce_loss=float(current_losses['ce_loss'].detach()),
+            bitperchar=float(current_losses['bitperchar'].detach()) if 'bitperchar' in current_losses else 0.,
+            load_time=load_time,
+        )
+
         if current_step % self.log_interval == 0:
             self.log_loss(current_step)
-            self.accumulated_loss = 0
-            self.accumulated_ce_loss = 0
-            self.accumulated_bitperchar = 0
-            self.accumulated_loadtime = 0.
+            self.log_time = time.time()
+            self.accumulator.reset()
         if self.val_interval is not None and self.val_interval > 0 and current_step % self.val_interval == 0:
             self.validate(current_step)
         if self.gen_interval is not None and self.gen_interval > 0 and current_step % self.gen_interval == 0:
             self.generate(current_step)
+        if self.info_interval is not None and self.info_interval > 0 and current_step % self.info_interval == 0:
+            self.info(current_step)
 
     def log_loss(self, current_step):
-        avg_loss = self.accumulated_loss / self.log_interval
-        avg_ce_loss = self.accumulated_ce_loss / self.log_interval
-        avg_bitperchar = self.accumulated_bitperchar / self.log_interval
-        avg_loadtime = self.accumulated_loadtime / self.log_interval
-        print(f"{time.time() - self.log_time:7.3f} {avg_loadtime:7.3f} "
+        v = self.accumulator.values
+        print(f"{time.time() - self.log_time:7.3f} {v['loadtime']:7.3f} "
               f"loss, ce_loss, bitperchar at step {current_step:8d}: "
-              f"{avg_loss:11.6f}, {avg_ce_loss:11.6f}, {avg_bitperchar:10.6f}", flush=True)
+              f"{v['loss']:11.6f}, {v['ce_loss']:11.6f}, {v['bitperchar']:10.6f}", flush=True)
 
     def validate(self, current_step):
         avg_loss, avg_accuracy = self.trainer.validate()
@@ -72,6 +93,17 @@ class Logger:
             self.generate_thread.daemon = True
             self.generate_thread.start()
 
+    def info(self, current_step):
+        pass
+        # print(
+        #     'GPU Mem Allocated:',
+        #     round(torch.cuda.memory_allocated(0) / 1024 ** 3, 1),
+        #     'GB, ',
+        #     'Cached:',
+        #     round(torch.cuda.memory_cached(0) / 1024 ** 3, 1),
+        #     'GB'
+        # )
+
 
 # Code referenced from https://gist.github.com/gyglim/1f8dfb1b5c82627ae3efcfbbadb9f514
 class TensorboardLogger(Logger):
@@ -79,6 +111,7 @@ class TensorboardLogger(Logger):
                  log_interval=50,
                  validation_interval=200,
                  generate_interval=500,
+                 info_interval=1000,
                  trainer=None,
                  generate_function=None,
                  log_dir='logs',
@@ -86,7 +119,8 @@ class TensorboardLogger(Logger):
                  log_image_summaries=True,
                  print_output=False,
                  ):
-        super().__init__(log_interval, validation_interval, generate_interval, trainer, generate_function)
+        super().__init__(
+            log_interval, validation_interval, generate_interval, info_interval, trainer, generate_function)
         self.writer = tf.summary.FileWriter(log_dir)
         self.log_param_histograms = log_param_histograms
         self.log_image_summaries = log_image_summaries
@@ -108,9 +142,8 @@ class TensorboardLogger(Logger):
         if self.print_output:
             Logger.log_loss(self, current_step)
         # loss
-        avg_loss = self.accumulated_loss / self.log_interval
-        avg_ce_loss = self.accumulated_ce_loss / self.log_interval
-        avg_bitperchar = self.accumulated_bitperchar / self.log_interval
+        v = self.accumulator.values
+        avg_loss, avg_ce_loss, avg_bitperchar = v['loss'], v['ce_loss'], v['bitperchar']
         self.scalar_summary('avg loss', avg_loss, current_step)
         self.scalar_summary('avg ce loss', avg_ce_loss, current_step)
         self.scalar_summary('avg bitperchar', avg_bitperchar, current_step)
