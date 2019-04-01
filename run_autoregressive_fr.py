@@ -3,6 +3,7 @@ import sys
 import argparse
 import time
 import json
+import hashlib
 
 import numpy as np
 import torch
@@ -56,6 +57,12 @@ srun stdbuf -oL -eL {sys.executable} \\
   --channels {args.channels} --dropout-p {args.dropout_p} --r-seed {args.r_seed} \\
   --restore {{restore}}
 """
+
+if args.restore is not None:
+    # prevent from repeating batches when restoring at intermediate point
+    args.r_seed += int(hashlib.sha1(args.restore.encode()).hexdigest(), 16)
+    args.r_seed = args.r_seed % (2 ** 32 - 1)  # limit of np.random.seed
+
 
 torch.manual_seed(args.r_seed)
 torch.cuda.manual_seed_all(args.r_seed)
@@ -125,7 +132,8 @@ trainer = autoregressive_train.AutoregressiveTrainer(
         log_interval=500,
         validation_interval=1000,
         generate_interval=5000,
-        log_dir=working_dir + '/logs/' + run_name
+        log_dir=working_dir + '/logs/' + run_name,
+        print_output=True
     )
 )
 if args.restore is not None:

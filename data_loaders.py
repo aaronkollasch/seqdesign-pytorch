@@ -227,6 +227,7 @@ class FastaDataset(SequenceDataset):
         filename = os.path.join(self.working_dir, self.dataset)
         names_list = []
         sequence_list = []
+        max_seq_len = 0
 
         with open(filename, 'r') as fa:
             for i, (title, seq) in enumerate(SimpleFastaParser(fa)):
@@ -239,11 +240,14 @@ class FastaDataset(SequenceDataset):
 
                 names_list.append(title)
                 sequence_list.append(seq)
+                if len(seq) > max_seq_len:
+                    max_seq_len = len(seq)
 
         self.names = np.array(names_list)
         self.sequences = np.array(sequence_list)
 
         print("Number of sequences:", self.n_eff)
+        print("Max sequence length:", max_seq_len)
 
     @property
     def n_eff(self):
@@ -362,6 +366,7 @@ class SingleFamilyDataset(SequenceDataset):
         print("Number of families:", self.num_families)
         print("Neff:", np.sum(weight_list))
         print("Max family size:", max_family_size)
+        print("Max sequence length:", max_seq_len)
 
         for i, family_name in enumerate(self.family_name_list):
             self.family_name_to_idx[family_name] = i
@@ -416,6 +421,7 @@ class DoubleWeightedNanobodyDataset(SequenceDataset):
         self.load_data()
 
     def load_data(self):
+        max_seq_len = 0
         filename = self.working_dir + '/datasets/' + self.dataset
         with open(filename, 'r') as fa:
             for i, (title, seq) in enumerate(SimpleFastaParser(fa)):
@@ -438,9 +444,12 @@ class DoubleWeightedNanobodyDataset(SequenceDataset):
                 else:
                     self.clu1_to_clu2_to_seq_names[clu1] = {clu2: [name]}
                     self.clu1_to_clu2_to_clu_size[clu1] = {clu2: 1}
+                if len(seq) > max_seq_len:
+                    max_seq_len = len(seq)
 
         self.clu1_list = list(self.clu1_to_clu2_to_seq_names.keys())
         print("Num clusters:", len(self.clu1_list))
+        print("Max sequence length:", max_seq_len)
 
     @property
     def n_eff(self):

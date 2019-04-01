@@ -65,9 +65,9 @@ def get_cuda_path():
 # https://github.com/ilkarman/DeepLearningFrameworks/blob/master/notebooks/common/utils.py
 def get_cuda_version():
     """Get CUDA version"""
-    path = get_cuda_path() + 'version.txt'
-    if path is not None and os.path.isfile(path):
-        with open(path, 'r') as f:
+    path = get_cuda_path()
+    if path is not None and os.path.isfile(path + 'version.txt'):
+        with open(path + 'version.txt', 'r') as f:
             data = f.read().replace('\n', '')
         return data
     else:

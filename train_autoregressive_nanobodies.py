@@ -20,7 +20,7 @@ model = autoregressive_model.AutoregressiveFR()
 model.to(device)
 dataset = data_loaders.DoubleWeightedNanobodyDataset(
     batch_size=48,
-    dataset='nanobodies/Manglik_filt_seq_id80_id90.fa', working_dir='.',
+    dataset='datasets/nanobodies/Manglik_filt_seq_id80_id90.fa', working_dir='.',
     matching=True, unlimited_epoch=True,
 )
 loader = data.DataLoader(

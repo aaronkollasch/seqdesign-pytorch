@@ -6,6 +6,7 @@ import tensorflow as tf
 import numpy as np
 from PIL import Image
 import torch
+import time
 
 
 class Logger:
@@ -19,17 +20,28 @@ class Logger:
         self.log_interval = log_interval
         self.val_interval = validation_interval
         self.gen_interval = generate_interval
+        self.log_time = time.time()
         self.accumulated_loss = 0
+        self.accumulated_ce_loss = 0
+        self.accumulated_bitperchar = 0
+        self.accumulated_loadtime = 0.
         self.generate_function = generate_function
         if self.generate_function is not None:
             self.generate_thread = threading.Thread(target=self.generate_function)
             self.generate_function.daemon = True
 
-    def log(self, current_step, current_losses, current_grad_norm):
-        self.accumulated_loss += float(current_losses['loss'])
+    def log(self, current_step, current_losses, current_grad_norm, load_time=0.):
+        self.accumulated_loss += float(current_losses['loss'].detach())
+        self.accumulated_ce_loss += float(current_losses['ce_loss'].detach())
+        if 'bitperchar' in current_losses:
+            self.accumulated_bitperchar += float(current_losses['bitperchar'].detach())
+        self.accumulated_loadtime += load_time
         if current_step % self.log_interval == 0:
             self.log_loss(current_step)
             self.accumulated_loss = 0
+            self.accumulated_ce_loss = 0
+            self.accumulated_bitperchar = 0
+            self.accumulated_loadtime = 0.
         if self.val_interval is not None and self.val_interval > 0 and current_step % self.val_interval == 0:
             self.validate(current_step)
         if self.gen_interval is not None and self.gen_interval > 0 and current_step % self.gen_interval == 0:
@@ -37,7 +49,12 @@ class Logger:
 
     def log_loss(self, current_step):
         avg_loss = self.accumulated_loss / self.log_interval
-        print("loss at step " + str(current_step) + ": " + str(avg_loss), flush=True)
+        avg_ce_loss = self.accumulated_ce_loss / self.log_interval
+        avg_bitperchar = self.accumulated_bitperchar / self.log_interval
+        avg_loadtime = self.accumulated_loadtime / self.log_interval
+        print(f"{time.time() - self.log_time:7.3f} {avg_loadtime:7.3f} "
+              f"loss, ce_loss, bitperchar at step {current_step:8d}: "
+              f"{avg_loss:11.6f}, {avg_ce_loss:11.6f}, {avg_bitperchar:10.6f}", flush=True)
 
     def validate(self, current_step):
         avg_loss, avg_accuracy = self.trainer.validate()
@@ -66,22 +83,37 @@ class TensorboardLogger(Logger):
                  generate_function=None,
                  log_dir='logs',
                  log_param_histograms=False,
+                 log_image_summaries=True,
+                 print_output=False,
                  ):
         super().__init__(log_interval, validation_interval, generate_interval, trainer, generate_function)
         self.writer = tf.summary.FileWriter(log_dir)
         self.log_param_histograms = log_param_histograms
+        self.log_image_summaries = log_image_summaries
+        self.print_output = print_output
 
-    def log(self, current_step, current_losses, current_grad_norm):
-        super(TensorboardLogger, self).log(current_step, current_losses, current_grad_norm)
+    def log(self, current_step, current_losses, current_grad_norm, load_time=0.):
+        super(TensorboardLogger, self).log(current_step, current_losses, current_grad_norm, load_time)
         self.scalar_summary('grad norm', current_grad_norm, current_step)
         self.scalar_summary('loss', current_losses['loss'].detach(), current_step)
+        self.scalar_summary('ce_loss', current_losses['ce_loss'].detach(), current_step)
+        if 'accuracy' in current_losses:
+            self.scalar_summary('accuracy', current_losses['accuracy'].detach(), current_step)
+        if 'bitperchar' in current_losses:
+            self.scalar_summary('bitperchar', current_losses['bitperchar'].detach(), current_step)
         self.scalar_summary('reconstruction loss', current_losses['ce_loss'].detach(), current_step)
         self.scalar_summary('regularization loss', current_losses['weight_cost'].detach(), current_step)
 
     def log_loss(self, current_step):
+        if self.print_output:
+            Logger.log_loss(self, current_step)
         # loss
         avg_loss = self.accumulated_loss / self.log_interval
+        avg_ce_loss = self.accumulated_ce_loss / self.log_interval
+        avg_bitperchar = self.accumulated_bitperchar / self.log_interval
         self.scalar_summary('avg loss', avg_loss, current_step)
+        self.scalar_summary('avg ce loss', avg_ce_loss, current_step)
+        self.scalar_summary('avg bitperchar', avg_bitperchar, current_step)
 
         if self.log_param_histograms:
             for tag, value, in self.trainer.model.named_parameters():
@@ -90,13 +122,17 @@ class TensorboardLogger(Logger):
                 if value.grad is not None:
                     self.histo_summary(tag + '/grad', value.grad.data, current_step)
 
-        for tag, summary in self.trainer.model.image_summaries.items():
-            self.image_summary(tag, summary['img'], current_step, max_outputs=summary.get('max_outputs', 3))
+        if self.log_image_summaries:
+            for tag, summary in self.trainer.model.image_summaries.items():
+                self.image_summary(tag, summary['img'], current_step, max_outputs=summary.get('max_outputs', 3))
 
     def validate(self, current_step):
         avg_loss, avg_accuracy = self.trainer.validate()
         self.scalar_summary('validation loss', avg_loss, current_step)
         self.scalar_summary('validation accuracy', avg_accuracy, current_step)
+        if self.print_output:
+            print("validation loss: " + str(avg_loss), flush=True)
+            print("validation accuracy: " + str(avg_accuracy * 100) + "%", flush=True)
 
     def scalar_summary(self, tag, value, step):
         """Log a scalar variable."""

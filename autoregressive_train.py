@@ -12,14 +12,14 @@ from model_logging import Logger
 
 class AutoregressiveTrainer:
     default_params = {
-            'optimizer': 'Adam',
-            'lr': 0.001,
-            'weight_decay': 0,
-            'clip': 100.0,
-            'snapshot_path': None,
-            'snapshot_name': 'snapshot',
-            'snapshot_interval': 1000,
-        }
+        'optimizer': 'Adam',
+        'lr': 0.001,
+        'weight_decay': 0,
+        'clip': 100.0,
+        'snapshot_path': None,
+        'snapshot_name': 'snapshot',
+        'snapshot_interval': 1000,
+    }
 
     def __init__(
             self,
@@ -77,7 +77,7 @@ class AutoregressiveTrainer:
         data_iter = iter(self.loader)
         n_eff = self.loader.dataset.n_eff
 
-        print('    step  step-t load-t   loss       CE-loss    bitperchar   l2-norm', flush=True)
+        # print('    step  step-t load-t   loss       CE-loss    bitperchar   l2-norm', flush=True)
         for step in range(int(self.model.step) + 1, int(steps) + 1):
             self.model.step = step
             start = time.time()
@@ -99,13 +99,17 @@ class AutoregressiveTrainer:
                 losses = self.model.calculate_loss(
                     output_logits_f, batch['prot_decoder_output'], batch['prot_mask_decoder'], n_eff)
 
-            loss = losses['loss']
-            ce_loss = losses['ce_loss']
-            kl_loss = losses['kl_embedding_loss']
-            bitperchar = losses['bitperchar']
+            if step in [1, 10, 100, 1000, 10000, 100000]:
+                try:
+                    print(f'step {step:6d}: '
+                          f'GPU Mem Allocated: {round(torch.cuda.memory_allocated(0) / 1024 ** 3, 1)} GB, '
+                          f'Cached: {round(torch.cuda.memory_cached(0) / 1024 ** 3, 1)} GB',
+                          flush=True)
+                except (AttributeError, RuntimeError):
+                    pass
 
             self.optimizer.zero_grad()
-            loss.backward()
+            losses['loss'].backward()
 
             if self.params['clip'] is not None:
                 total_norm = nn.utils.clip_grad_norm_(self.model.parameters(), self.params['clip'])
@@ -120,7 +124,8 @@ class AutoregressiveTrainer:
                 print("nan detected:")
                 print("{: 8d} {:6.3f} {:5.4f} {:11.6f} {:11.6f} {:11.8f} {:10.6f}".format(
                     step, time.time() - start, data_load_time,
-                    loss.detach(), ce_loss.detach(), bitperchar.detach(), kl_loss.detach()))
+                    losses['loss'].detach(), losses['ce_loss'].detach(),
+                    losses['bitperchar'].detach(), losses['kl_embedding_loss'].detach()))
                 print('grad norm', total_norm)
                 print('params', [name for name, param in self.model.named_parameters() if torch.isnan(param).any()])
                 print('grads', [name for name, param in self.model.named_parameters() if torch.isnan(param.grad).any()])
@@ -129,15 +134,22 @@ class AutoregressiveTrainer:
 
             self.optimizer.step()
 
-            if step % self.params['snapshot_interval'] == 0:
+            for key in losses:
+                losses[key] = losses[key].detach()
+                if self.run_fr and 'per_seq' not in key and '_f' not in key and '_r' not in key:
+                    losses[key] /= 2
+            losses.update({'grad_norm': total_norm})
+
+            if step in [2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000, 2500000] or \
+                    step % self.params['snapshot_interval'] == 0:
                 if self.params['snapshot_path'] is None:
                     continue
                 self.save_state()
 
-            self.logger.log(step, losses, total_norm)
-            print("{: 8d} {:6.3f} {:5.4f} {:11.6f} {:11.6f} {:11.8f} {:10.6f}".format(
-                step, time.time()-start, data_load_time,
-                loss.detach(), ce_loss.detach(), bitperchar.detach(), kl_loss.detach()), flush=True)
+            self.logger.log(step, losses, total_norm, load_time=data_load_time)
+            # print("{: 8d} {:6.3f} {:5.4f} {:11.6f} {:11.6f} {:11.8f} {:10.6f}".format(
+            #     step, time.time()-start, data_load_time,
+            #     losses['loss'], losses['ce_loss'], losses['bitperchar'], losses['kl_embedding_loss']), flush=True)
 
     def validate(self, batch_size=48):
         return 0.0, 0.0
@@ -231,12 +243,10 @@ class AutoregressiveTrainer:
         return output
 
     def save_state(self, last_batch=None):
-        snapshot = f"{self.params['snapshot_path']}/{self.params['snapshot_name']}_{self.model.step}.pth"
+        snapshot = f"{self.params['snapshot_path']}/{self.params['snapshot_name']}/{self.model.step}.pth"
         revive_exec = f"{self.params['snapshot_path']}/revive_executable/{self.params['snapshot_name']}.sh"
         if not os.path.exists(os.path.dirname(snapshot)):
             os.makedirs(os.path.dirname(snapshot), exist_ok=True)
-        if not os.path.exists(os.path.dirname(revive_exec)):
-            os.makedirs(os.path.dirname(revive_exec), exist_ok=True)
         torch.save(
             {
                 'step': self.model.step,
@@ -251,11 +261,14 @@ class AutoregressiveTrainer:
             },
             snapshot
         )
-        with open(revive_exec, "w") as f:
-            snapshot_exec = self.params['snapshot_exec_template'].format(
-                restore=os.path.abspath(snapshot)
-            )
-            f.write(snapshot_exec)
+        if 'snapshot_exec_template' in self.params:
+            if not os.path.exists(os.path.dirname(revive_exec)):
+                os.makedirs(os.path.dirname(revive_exec), exist_ok=True)
+            with open(revive_exec, "w") as f:
+                snapshot_exec = self.params['snapshot_exec_template'].format(
+                    restore=os.path.abspath(snapshot)
+                )
+                f.write(snapshot_exec)
 
     def load_state(self, checkpoint, map_location=None):
         if not isinstance(checkpoint, dict):
@@ -285,7 +298,7 @@ class AutoregressiveVAETrainer(AutoregressiveTrainer):
         'snapshot_path': None,
         'snapshot_name': 'snapshot',
         'snapshot_interval': 1000,
-        }
+    }
 
     def __init__(
             self,
