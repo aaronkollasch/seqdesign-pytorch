@@ -564,6 +564,290 @@ class DoubleClusteredSequenceDataset(SequenceDataset):
         return batch
 
 
+class IndexedFastaDataset(SequenceDataset):
+    """Load batches of sequences from an indexed fasta file, either sequentially or sampled isotropically"""
+
+    def __init__(
+            self,
+            dataset='',
+            working_dir='.',
+            batch_size=32,
+            unlimited_epoch=False,
+            alphabet_type='protein',
+            reverse=False,
+            matching=False,
+    ):
+        super(IndexedFastaDataset, self).__init__(
+            batch_size=batch_size,
+            unlimited_epoch=unlimited_epoch,
+            alphabet_type=alphabet_type,
+            reverse=reverse,
+            matching=matching
+        )
+        self.dataset = dataset
+        self.dataset_f = os.path.join(working_dir, dataset)
+        self.dataset_idx = dataset + '.fai'
+        self.working_dir = working_dir
+
+        self.names = None
+        self.offsets = None
+
+        self.load_data()
+
+    def load_data(self):
+        filename = os.path.join(self.working_dir, self.dataset_idx)
+        names = []
+        offsets = []
+        max_seq_len = 0
+        with open(filename, 'rb') as f:
+            for line in f:
+                line = line.split(b'\t')
+                name, length, offset = line[0], int(line[1]), int(line[2])
+                names.append(name)
+                offsets.append(offset)
+
+                if length > max_seq_len:
+                    max_seq_len = length
+
+        self.names = np.array(names)
+        self.offsets = np.array(offsets)
+        del names, offsets
+
+        print("Num sequences:", len(self.offsets))
+        print("Max sequence length:", max_seq_len)
+
+    @property
+    def n_eff(self):
+        return len(self.offsets)  # not a true n_eff
+
+    def __getitem__(self, index):
+        """
+        :param index: batch index; ignored if unlimited_epoch
+        :return: batch of size self.batch_size
+        """
+
+        if self.unlimited_epoch:
+            indices = np.random.randint(0, self.n_eff, self.batch_size)
+        else:
+            first_index = index * self.batch_size
+            last_index = min((index+1) * self.batch_size, self.n_eff)
+            indices = np.arange(first_index, last_index)
+
+        offsets = self.offsets[indices]
+        seqs = []
+        with open(self.dataset_f, 'rt', buffering=1) as dataset_f:
+            for offset in offsets:
+                dataset_f.seek(offset)
+                seqs.append(dataset_f.readline().rstrip())
+        seqs = np.array(seqs)
+
+        try:
+            batch = self.sequences_to_onehot(seqs)
+            batch['names'] = self.names[indices]
+            batch['sequences'] = seqs
+            return batch
+        except KeyError as e:
+            print(offsets, seqs, flush=True)
+            raise e
+
+
+class SingleClusteredIndexedSequenceDataset(SequenceDataset):
+    """
+    Reads an indexed fasta dataset.
+    Index filename is (fasta_file).fai
+    Create index using `samtools faidx (fasta file)`.
+    """
+
+    def __init__(
+            self,
+            dataset='',
+            working_dir='.',
+            batch_size=32,
+            unlimited_epoch=True,
+            alphabet_type='protein',
+            reverse=False,
+            matching=False,
+    ):
+        super(SingleClusteredIndexedSequenceDataset, self).__init__(
+            batch_size=batch_size,
+            unlimited_epoch=unlimited_epoch,
+            alphabet_type=alphabet_type,
+            reverse=reverse,
+            matching=matching,
+        )
+        self.dataset = dataset
+        self.dataset_f = os.path.join(working_dir, dataset)
+        self.dataset_idx = dataset + '.fai'
+        self.working_dir = working_dir
+
+        self.clu1_to_offset = {}
+        self.clu1_list = []
+
+        self.load_data()
+
+    def load_data(self):
+        filename = os.path.join(self.working_dir, self.dataset_idx)
+        max_seq_len = 0
+        num_seqs = 0
+        with open(filename, 'rb') as f:
+            for line in f:
+                line = line.split(b'\t')
+                title, length, offset = line[0], int(line[1]), int(line[2])
+                name, clu1, clu2 = title.split(b':')
+
+                if clu1 in self.clu1_to_offset:
+                    self.clu1_to_offset[clu1].append(offset)
+                else:
+                    self.clu1_to_offset[clu1] = [offset]
+
+                if length > max_seq_len:
+                    max_seq_len = length
+                num_seqs += 1
+
+        self.clu1_list = list(self.clu1_to_offset.keys())
+        print("Num clusters:", len(self.clu1_list))
+        print("Num sequences:", num_seqs)
+        print("Max sequence length:", max_seq_len)
+
+    @property
+    def n_eff(self):
+        return len(self.clu1_list)
+
+    def __getitem__(self, index):
+        """
+        :param index: ignored
+        :return: batch of size self.batch_size
+        """
+        offsets = []
+        seqs = []
+
+        with open(self.dataset_f, 'rt', buffering=1) as dataset_f:
+            for i in range(self.batch_size):
+                # Pick a cluster id80
+                clu1_idx = np.random.randint(0, len(self.clu1_list))
+                clu1 = self.clu1_list[clu1_idx]
+
+                # Then pick a cluster id90 from the cluster id80s
+                clu2 = np.random.choice(list(self.clu1_to_offset[clu1].keys()))
+
+                # Then pick a random sequence all in those clusters
+                offset = np.random.choice(self.clu1_to_offset[clu1][clu2])
+                offsets.append(offset)
+
+                # then grab the associated sequence
+                dataset_f.seek(offset)
+                seqs.append(dataset_f.readline().rstrip())
+
+        try:
+            batch = self.sequences_to_onehot(seqs)
+            return batch
+        except KeyError as e:
+            print(offsets, seqs, flush=True)
+            raise e
+
+
+class DoubleClusteredIndexedSequenceDataset(SequenceDataset):
+    """
+    Reads an indexed fasta dataset.
+    Index filename is (fasta_file).fai
+    Create index using `samtools faidx (fasta file)`.
+    """
+
+    def __init__(
+            self,
+            dataset='',
+            working_dir='.',
+            batch_size=32,
+            unlimited_epoch=True,
+            alphabet_type='protein',
+            reverse=False,
+            matching=False,
+    ):
+        super(DoubleClusteredIndexedSequenceDataset, self).__init__(
+            batch_size=batch_size,
+            unlimited_epoch=unlimited_epoch,
+            alphabet_type=alphabet_type,
+            reverse=reverse,
+            matching=matching,
+        )
+        self.dataset = dataset
+        self.dataset_f = os.path.join(working_dir, dataset)
+        self.dataset_idx = dataset + '.fai'
+        self.working_dir = working_dir
+
+        self.clu1_to_clu2_to_offset = {}
+        self.clu1_list = []
+
+        self.load_data()
+
+    def load_data(self):
+        filename = os.path.join(self.working_dir, self.dataset_idx)
+        max_seq_len = 0
+        num_subclusters = 0
+        num_seqs = 0
+        with open(filename, 'rb') as f:
+            for line in f:
+                line = line.split(b'\t')
+                title, length, offset = line[0], int(line[1]), int(line[2])
+                name, clu1, clu2 = title.split(b':')
+
+                if clu1 in self.clu1_to_clu2_to_offset:
+                    if clu2 in self.clu1_to_clu2_to_offset[clu1]:
+                        self.clu1_to_clu2_to_offset[clu1][clu2].append(offset)
+                    else:
+                        self.clu1_to_clu2_to_offset[clu1][clu2] = [offset]
+                        num_subclusters += 1
+                else:
+                    self.clu1_to_clu2_to_offset[clu1] = {clu2: [offset]}
+                    num_subclusters += 1
+
+                if length > max_seq_len:
+                    max_seq_len = length
+                num_seqs += 1
+
+        self.clu1_list = list(self.clu1_to_clu2_to_offset.keys())
+        print("Num clusters:", len(self.clu1_list))
+        print("Num subclusters:", num_subclusters)
+        print("Num sequences:", num_seqs)
+        print("Max sequence length:", max_seq_len)
+
+    @property
+    def n_eff(self):
+        return len(self.clu1_list)
+
+    def __getitem__(self, index):
+        """
+        :param index: ignored
+        :return: batch of size self.batch_size
+        """
+        offsets = []
+        seqs = []
+
+        with open(self.dataset_f, 'rt', buffering=1) as dataset_f:
+            for i in range(self.batch_size):
+                # Pick a cluster id80
+                clu1_idx = np.random.randint(0, len(self.clu1_list))
+                clu1 = self.clu1_list[clu1_idx]
+
+                # Then pick a cluster id90 from the cluster id80s
+                clu2 = np.random.choice(list(self.clu1_to_clu2_to_offset[clu1].keys()))
+
+                # Then pick a random sequence all in those clusters
+                offset = np.random.choice(self.clu1_to_clu2_to_offset[clu1][clu2])
+                offsets.append(offset)
+
+                # then grab the associated sequence
+                dataset_f.seek(offset)
+                seqs.append(dataset_f.readline().rstrip())
+
+        try:
+            batch = self.sequences_to_onehot(seqs)
+            return batch
+        except KeyError as e:
+            print(offsets, seqs, flush=True)
+            raise e
+
+
 class VHAntibodyDataset(SequenceDataset):
     """Abstract antibody dataset"""
 

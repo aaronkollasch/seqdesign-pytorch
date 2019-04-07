@@ -136,8 +136,14 @@ print("Run:", args.run_name)
 
 if args.dataset_type in ['double', 'double_clustered']:
     data_loader = data_loaders.DoubleClusteredSequenceDataset
+elif args.dataset_type in ['double_indexed', 'double_clustered_indexed']:
+    data_loader = data_loaders.DoubleClusteredIndexedSequenceDataset
 elif args.dataset_type in ['single', 'single_clustered']:
     data_loader = data_loaders.SingleClusteredSequenceDataset
+elif args.dataset_type in ['single_indexed', 'single_clustered_indexed']:
+    data_loader = data_loaders.SingleClusteredIndexedSequenceDataset
+elif args.dataset_type in ['indexed']:
+    data_loader = data_loaders.IndexedFastaDataset
 else:
     data_loader = data_loaders.FastaDataset
 
