@@ -18,7 +18,7 @@ device = torch.device("cuda:0" if USE_CUDA and torch.cuda.is_available() else "c
 
 model = autoregressive_model.AutoregressiveFR()
 model.to(device)
-dataset = data_loaders.DoubleWeightedNanobodyDataset(
+dataset = data_loaders.DoubleClusteredSequenceDataset(
     batch_size=48,
     dataset='datasets/nanobodies/Manglik_filt_seq_id80_id90.fa', working_dir='.',
     matching=True, unlimited_epoch=True,

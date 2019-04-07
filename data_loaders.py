@@ -392,7 +392,7 @@ class SingleFamilyDataset(SequenceDataset):
         return batch
 
 
-class DoubleWeightedNanobodyDataset(SequenceDataset):
+class SingleClusteredSequenceDataset(SequenceDataset):
     def __init__(
             self,
             dataset='',
@@ -403,7 +403,88 @@ class DoubleWeightedNanobodyDataset(SequenceDataset):
             reverse=False,
             matching=False,
     ):
-        super(DoubleWeightedNanobodyDataset, self).__init__(
+        super(SingleClusteredSequenceDataset, self).__init__(
+            batch_size=batch_size,
+            unlimited_epoch=unlimited_epoch,
+            alphabet_type=alphabet_type,
+            reverse=reverse,
+            matching=matching
+        )
+        self.dataset = dataset
+        self.working_dir = working_dir
+
+        self.name_to_sequence = {}
+        self.clu1_to_seq_names = {}
+        self.clu1_list = []
+
+        self.load_data()
+
+    def load_data(self):
+        max_seq_len = 0
+        num_seqs = 0
+        filename = self.working_dir + '/datasets/' + self.dataset
+        with open(filename, 'r') as fa:
+            for i, (title, seq) in enumerate(SimpleFastaParser(fa)):
+                name, clu1 = title.split(':')
+                valid = True
+                for letter in seq:
+                    if letter not in self.aa_dict:
+                        valid = False
+                if not valid:
+                    continue
+
+                self.name_to_sequence[name] = seq
+                if clu1 in self.clu1_to_seq_names:
+                    self.clu1_to_seq_names[clu1].append(name)
+                else:
+                    self.clu1_to_seq_names[clu1] = [name]
+
+                if len(seq) > max_seq_len:
+                    max_seq_len = len(seq)
+                num_seqs += 1
+
+        self.clu1_list = list(self.clu1_to_seq_names.keys())
+        print("Num clusters:", len(self.clu1_list))
+        print("Num sequences:", num_seqs)
+        print("Max sequence length:", max_seq_len)
+
+    @property
+    def n_eff(self):
+        return len(self.clu1_list)
+
+    def __getitem__(self, index):
+        """
+        :param index: ignored
+        :return: batch of size self.batch_size
+        """
+        seqs = []
+        for i in range(self.batch_size):
+            # Pick a cluster id90
+            clu1_idx = np.random.randint(0, len(self.clu1_list))
+            clu1 = self.clu1_list[clu1_idx]
+
+            # Then pick a random sequence all in those clusters
+            seq_name = np.random.choice(self.clu1_to_seq_names[clu1])
+
+            # then grab the associated sequence
+            seqs.append(self.name_to_sequence[seq_name])
+
+        batch = self.sequences_to_onehot(seqs)
+        return batch
+
+
+class DoubleClusteredSequenceDataset(SequenceDataset):
+    def __init__(
+            self,
+            dataset='',
+            working_dir='.',
+            batch_size=32,
+            unlimited_epoch=True,
+            alphabet_type='protein',
+            reverse=False,
+            matching=False,
+    ):
+        super(DoubleClusteredSequenceDataset, self).__init__(
             batch_size=batch_size,
             unlimited_epoch=unlimited_epoch,
             alphabet_type=alphabet_type,
@@ -415,13 +496,14 @@ class DoubleWeightedNanobodyDataset(SequenceDataset):
 
         self.name_to_sequence = {}
         self.clu1_to_clu2_to_seq_names = {}
-        self.clu1_to_clu2_to_clu_size = {}
         self.clu1_list = []
 
         self.load_data()
 
     def load_data(self):
         max_seq_len = 0
+        num_subclusters = 0
+        num_seqs = 0
         filename = self.working_dir + '/datasets/' + self.dataset
         with open(filename, 'r') as fa:
             for i, (title, seq) in enumerate(SimpleFastaParser(fa)):
@@ -437,18 +519,21 @@ class DoubleWeightedNanobodyDataset(SequenceDataset):
                 if clu1 in self.clu1_to_clu2_to_seq_names:
                     if clu2 in self.clu1_to_clu2_to_seq_names[clu1]:
                         self.clu1_to_clu2_to_seq_names[clu1][clu2].append(name)
-                        self.clu1_to_clu2_to_clu_size[clu1][clu2] += 1
                     else:
                         self.clu1_to_clu2_to_seq_names[clu1][clu2] = [name]
-                        self.clu1_to_clu2_to_clu_size[clu1][clu2] = 1
+                        num_subclusters += 1
                 else:
                     self.clu1_to_clu2_to_seq_names[clu1] = {clu2: [name]}
-                    self.clu1_to_clu2_to_clu_size[clu1] = {clu2: 1}
+                    num_subclusters += 1
+
                 if len(seq) > max_seq_len:
                     max_seq_len = len(seq)
+                num_seqs += 1
 
         self.clu1_list = list(self.clu1_to_clu2_to_seq_names.keys())
         print("Num clusters:", len(self.clu1_list))
+        print("Num subclusters:", num_subclusters)
+        print("Num sequences:", num_seqs)
         print("Max sequence length:", max_seq_len)
 
     @property

@@ -29,6 +29,8 @@ parser.add_argument("--num-iterations", type=int, default=250005,
                     help="Number of iterations to run the model.")
 parser.add_argument("--dataset", type=str, default=None,
                     help="Dataset name for fitting model. Alignment weights must be computed beforehand.")
+parser.add_argument("--dataset-type", type=str, default='double_clustered',
+                    help="Level of clustering in dataset to sample from.")
 parser.add_argument("--num-data-workers", type=int, default=4,
                     help="Number of workers to load data")
 parser.add_argument("--restore", type=str, default=None,
@@ -132,7 +134,14 @@ print("Run:", args.run_name)
 # LOAD DATA #
 #############
 
-dataset = data_loaders.DoubleWeightedNanobodyDataset(
+if args.dataset_type in ['double', 'double_clustered']:
+    data_loader = data_loaders.DoubleClusteredSequenceDataset
+elif args.dataset_type in ['single', 'single_clustered']:
+    data_loader = data_loaders.SingleClusteredSequenceDataset
+else:
+    data_loader = data_loaders.FastaDataset
+
+dataset = data_loader(
     batch_size=args.batch_size,
     working_dir=data_dir,
     dataset=args.dataset,
@@ -184,7 +193,7 @@ trainer = autoregressive_train.AutoregressiveTrainer(
     # logger=model_logging.Logger(validation_interval=None),
     logger=model_logging.TensorboardLogger(
         log_interval=500,
-        validation_interval=1000,
+        validation_interval=None,
         generate_interval=5000,
         log_dir=working_dir + '/logs/' + args.run_name,
         print_output=True,
@@ -204,4 +213,5 @@ print("Dataset parameters:", json.dumps(dataset.params, indent=4))
 print("Num trainable parameters:", model.parameter_count())
 print(f"Training for {args.num_iterations - model.step} iterations")
 
+trainer.save_state()
 trainer.train(steps=args.num_iterations)

@@ -37,6 +37,7 @@ parser.add_argument("--from-tf", action='store_true',
 
 args = parser.parse_args()
 
+print('Call:', ' '.join(sys.argv))
 print("OS: ", sys.platform)
 print("Python: ", sys.version)
 print("PyTorch: ", torch.__version__)

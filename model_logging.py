@@ -14,7 +14,7 @@ class Accumulator:
         self._values = {key: 0. for key in keys}
         self.log_interval = 0
 
-    def update(self, **kwargs):
+    def accumulate(self, **kwargs):
         for key in kwargs:
             self._values[key] += kwargs[key]
         self.log_interval += 1
@@ -46,23 +46,25 @@ class Logger:
         self.gen_interval = generate_interval
         self.info_interval = info_interval
         self.log_time = time.time()
-        self.accumulator = Accumulator('loss', 'ce_loss', 'bitperchar', 'load_time')
+        self.load_time = 0.
+        self.accumulator = Accumulator('loss', 'ce_loss', 'bitperchar')
         self.generate_function = generate_function
         if self.generate_function is not None:
             self.generate_thread = threading.Thread(target=self.generate_function)
             self.generate_function.daemon = True
 
     def log(self, current_step, current_losses, current_grad_norm, load_time=0.):
-        self.accumulator.update(
+        self.load_time += load_time
+        self.accumulator.accumulate(
             loss=float(current_losses['loss'].detach()),
             ce_loss=float(current_losses['ce_loss'].detach()),
             bitperchar=float(current_losses['bitperchar'].detach()) if 'bitperchar' in current_losses else 0.,
-            load_time=load_time,
         )
 
         if current_step % self.log_interval == 0:
             self.log_loss(current_step)
             self.log_time = time.time()
+            self.load_time = 0.
             self.accumulator.reset()
         if self.val_interval is not None and self.val_interval > 0 and current_step % self.val_interval == 0:
             self.validate(current_step)
@@ -73,7 +75,7 @@ class Logger:
 
     def log_loss(self, current_step):
         v = self.accumulator.values
-        print(f"{time.time() - self.log_time:7.3f} {v['loadtime']:7.3f} "
+        print(f"{time.time() - self.log_time:7.3f} {self.load_time:7.3f} "
               f"loss, ce_loss, bitperchar at step {current_step:8d}: "
               f"{v['loss']:11.6f}, {v['ce_loss']:11.6f}, {v['bitperchar']:10.6f}", flush=True)
 
