@@ -1,6 +1,7 @@
 import os
 import time
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -184,19 +185,31 @@ class AutoregressiveTrainer:
         if model_eval:
             self.model.eval()
 
-        print('    step  step-t  CE-loss     bit-per-char', flush=True)
-        for i_iter in range(num_samples):  # TODO implement sampling
-            output = {
+        print('sample    step  step-t  CE-loss     bit-per-char', flush=True)
+        output = {
+            'name': [],
+            'mean': [],
+            'forward': [],
+            'reverse': [],
+            'bitperchar': [],
+            'sequence': []
+        }
+        if not self.run_fr:
+            del output['forward']
+            del output['reverse']
+
+        for i_iter in range(num_samples):
+            output_i = {
                 'name': [],
                 'mean': [],
-                'bitperchar': [],
                 'forward': [],
                 'reverse': [],
+                'bitperchar': [],
                 'sequence': []
             }
             if not self.run_fr:
-                del output['forward']
-                del output['reverse']
+                del output_i['forward']
+                del output_i['reverse']
 
             for i_batch, batch in enumerate(data_loader):
                 start = time.time()
@@ -217,27 +230,45 @@ class AutoregressiveTrainer:
                         losses = self.model.reconstruction_loss(
                             output_logits_f, batch['prot_decoder_output'], batch['prot_mask_decoder'])
 
-                    ce_loss = losses['ce_loss_per_seq']
-                    if self.run_fr:
-                        ce_loss_mean = ce_loss.mean(0)
-                    else:
-                        ce_loss_mean = ce_loss
-                    ce_loss_per_char = ce_loss_mean / batch['prot_mask_decoder'].sum([1, 2, 3])
+                    ce_loss = losses['ce_loss_per_seq'].cpu()
+                    bitperchar_per_seq = losses['bitperchar_per_seq'].cpu()
 
-                output['name'].extend(batch['names'])
-                output['sequence'].extend(batch['sequences'])
-                output['mean'].extend(ce_loss_mean.numpy())
-                output['bitperchar'].extend(ce_loss_per_char.numpy())
+                    if self.run_fr:
+                        ce_loss_per_seq = ce_loss.mean(0)
+                        bitperchar_per_seq = bitperchar_per_seq.mean(0)
+                    else:
+                        ce_loss_per_seq = ce_loss
+
+                output_i['name'].extend(batch['names'])
+                output_i['sequence'].extend(batch['sequences'])
+                output_i['mean'].extend(ce_loss_per_seq.numpy())
+                output_i['bitperchar'].extend(bitperchar_per_seq.numpy())
 
                 if self.run_fr:
                     ce_loss_f = ce_loss[0]
                     ce_loss_r = ce_loss[1]
-                    output['forward'].extend(ce_loss_f.numpy())
-                    output['reverse'].extend(ce_loss_r.numpy())
+                    output_i['forward'].extend(ce_loss_f.numpy())
+                    output_i['reverse'].extend(ce_loss_r.numpy())
 
-                print("{: 8d} {:6.3f} {:11.6f} {:11.6f}".format(
-                    i_batch, time.time()-start, ce_loss_mean.mean(), ce_loss_per_char.mean()),
+                print("{: 4d} {: 8d} {:6.3f} {:11.6f} {:11.6f}".format(
+                    i_iter, i_batch, time.time()-start, ce_loss_per_seq.mean(), bitperchar_per_seq.mean()),
                     flush=True)
+
+            output['name'] = output_i['name']
+            output['sequence'] = output_i['sequence']
+            output['bitperchar'].append(output_i['bitperchar'])
+            output['mean'].append(output_i['mean'])
+
+            if self.run_fr:
+                output['forward'].append(output_i['forward'])
+                output['reverse'].append(output_i['reverse'])
+
+        output['bitperchar'] = np.array(output['bitperchar']).mean(0)
+        output['mean'] = np.array(output['mean']).mean(0)
+
+        if self.run_fr:
+            output['forward'] = np.array(output['forward']).mean(0)
+            output['reverse'] = np.array(output['reverse']).mean(0)
 
         self.model.train()
         return output
