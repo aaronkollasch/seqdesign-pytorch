@@ -34,8 +34,8 @@ def nonlinearity(nonlin_type):
 def comb_losses(losses_f, losses_r):
     losses_comb = {}
     for key in losses_f.keys():
-        if 'per_seq' in key:
-            losses_comb[key] = torch.stack([losses_f[key], losses_r[key]])
+        if 'per_seq' in key or 'per_char' in key:
+            losses_comb[key] = torch.stack((losses_f[key], losses_r[key]))
         else:
             losses_comb[key] = losses_f[key] + losses_r[key]
             losses_comb[key + '_f'] = losses_f[key]

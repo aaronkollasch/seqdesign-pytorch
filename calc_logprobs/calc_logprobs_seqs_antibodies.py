@@ -20,6 +20,8 @@ parser.add_argument("--input", type=str, default='', required=True,
                     help="Directory and filename of the input data.")
 parser.add_argument("--output", type=str, default='output', required=True,
                     help="Directory and filename of the output data.")
+parser.add_argument("--save-logits", action='store_true',
+                    help="Save logprobs matrices.")
 parser.add_argument("--channels", type=int, default=48,
                     help="Number of channels.")
 parser.add_argument("--num-samples", type=int, default=1,
@@ -95,7 +97,14 @@ trainer = autoregressive_train.AutoregressiveTrainer(
     data_loader=None,
     device=device,
 )
-output = trainer.test(loader, model_eval=False, num_samples=args.num_samples)
+output = trainer.test(loader, model_eval=False, num_samples=args.num_samples, return_logits=bool(args.save_logits))
+if args.save_logits:
+    output, logits = output
+    logits_path = os.path.splitext(args.output)[0]
+    os.makedirs(logits_path, exist_ok=True)
+    for key, value in logits.items():
+        np.save(f"{logits_path}/{key}.npy", value)
+
 output = pd.DataFrame(output, columns=output.keys())
 output.to_csv(args.output, index=False)
 print("Done!")

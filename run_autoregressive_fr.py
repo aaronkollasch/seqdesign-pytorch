@@ -20,6 +20,8 @@ data_dir = '/n/groups/marks/projects/autoregressive'
 parser = argparse.ArgumentParser(description="Train an autoregressive model on a collection of sequences.")
 parser.add_argument("--channels", type=int, default=48,
                     help="Number of channels.")
+parser.add_argument("--batch-size", type=int, default=30,
+                    help="Batch size.")
 parser.add_argument("--num-iterations", type=int, default=250005,
                     help="Number of iterations to run the model.")
 parser.add_argument("--dataset", type=str, default=None,

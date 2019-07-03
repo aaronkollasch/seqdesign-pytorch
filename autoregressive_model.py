@@ -200,9 +200,10 @@ class Autoregressive(nn.Module):
         reconstruction_loss = reconstruction_per_seq.mean()
         bitperchar = bitperchar_per_seq.mean()
         return {
-            'seq_reconstruct': seq_reconstruct,
+            'seq_reconstruct_per_char': seq_reconstruct,
             'ce_loss': reconstruction_loss,
             'ce_loss_per_seq': reconstruction_per_seq,
+            'ce_loss_per_char': cross_entropy.squeeze(1),
             'bitperchar': bitperchar,
             'bitperchar_per_seq': bitperchar_per_seq
         }
@@ -262,7 +263,7 @@ class Autoregressive(nn.Module):
             kl_embedding_loss = torch.zeros([])
             kl_loss = torch.zeros([])
 
-        seq_reconstruct = reconstruction_loss.pop('seq_reconstruct')
+        seq_reconstruct = reconstruction_loss.pop('seq_reconstruct_per_char')
         self.image_summaries['SeqReconstruct'] = dict(img=seq_reconstruct.permute(0, 1, 3, 2).detach(), max_outputs=3)
         self.image_summaries['SeqTarget'] = dict(img=target_seqs.permute(0, 1, 3, 2).detach(), max_outputs=3)
         self.image_summaries['SeqDelta'] = dict(
@@ -662,12 +663,12 @@ class AutoregressiveVAE(nn.Module):
         z = z.unsqueeze(-1).unsqueeze(-1).expand((-1, -1, 1, inputs.size(3)))
         if dec_params['positional_embedding']:
             number_range = torch.arange(0, inputs.size(3), dtype=inputs.dtype, device=inputs.device)
-            number_range = number_range.view(1, 1, 1, inputs.size(3))
+            number_range = number_range.view((1, 1, 1, inputs.size(3)))
             pos_embed = torch.exp(-0.5 * (number_range - self.rbf_locations).pow(2))
             pos_embed = pos_embed.expand((inputs.size(0), -1, 1, -1))
         else:
             pos_embed = torch.tensor([], dtype=inputs.dtype, device=inputs.device)
-        input_1d = torch.cat([inputs, z, pos_embed], 1)
+        input_1d = torch.cat((inputs, z, pos_embed), 1)
 
         up_val_1d = self.decoder.start_conv(input_1d)
         for convnet in self.decoder.dilation_blocks:
@@ -709,9 +710,10 @@ class AutoregressiveVAE(nn.Module):
         reconstruction_loss = reconstruction_per_seq.mean()
         bitperchar = bitperchar_per_seq.mean()
         return {
-            'seq_reconstruct': seq_reconstruct,
+            'seq_reconstruct_per_char': seq_reconstruct,
             'ce_loss': reconstruction_loss,
             'ce_loss_per_seq': reconstruction_per_seq,
+            'ce_loss_per_char': cross_entropy.squeeze(1),
             'bitperchar': bitperchar,
             'bitperchar_per_seq': bitperchar_per_seq
         }
@@ -765,7 +767,7 @@ class AutoregressiveVAE(nn.Module):
             kl_loss += kl_logits_loss
             loss = loss + self._anneal_embedding(self.step) * kl_logits_loss
 
-        seq_reconstruct = reconstruction_loss.pop('seq_reconstruct')
+        seq_reconstruct = reconstruction_loss.pop('seq_reconstruct_per_char')
         self.image_summaries['SeqReconstruct'] = dict(img=seq_reconstruct.permute(0, 1, 3, 2).detach(), max_outputs=3)
         self.image_summaries['SeqTarget'] = dict(img=target_seqs.permute(0, 1, 3, 2).detach(), max_outputs=3)
         self.image_summaries['SeqDelta'] = dict(
@@ -789,6 +791,7 @@ class AutoregressiveVAE(nn.Module):
         """Approximate the mutual information between x and z
         I(x, z) = E_xE_{q(z|x)}log(q(z|x)) - E_xE_{q(z|x)}log(q(z))
 
+        Adapted from https://github.com/jxhe/vae-lagging-encoder
         return: Float
         """
         # [x_batch, nz]

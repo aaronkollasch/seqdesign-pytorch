@@ -91,6 +91,7 @@ class SequenceDataset(GeneratorDataset):
         self.alphabet_type = alphabet_type
         self.reverse = reverse
         self.matching = matching
+        self.max_seq_len = -1
 
         # Load up the alphabet type to use, whether that be DNA, RNA, or protein
         if self.alphabet_type == 'protein':
@@ -207,6 +208,7 @@ class FastaDataset(SequenceDataset):
             alphabet_type='protein',
             reverse=False,
             matching=False,
+            # TODO add shuffle parameter: iterate through shuffled sequences
     ):
         super(FastaDataset, self).__init__(
             batch_size=batch_size,
@@ -245,6 +247,7 @@ class FastaDataset(SequenceDataset):
 
         self.names = np.array(names_list)
         self.sequences = np.array(sequence_list)
+        self.max_seq_len = max_seq_len
 
         print("Number of sequences:", self.n_eff)
         print("Max sequence length:", max_seq_len)
@@ -303,7 +306,6 @@ class SingleFamilyDataset(SequenceDataset):
         self.family_name_to_idx = {}
         self.idx_to_family_name = {}
 
-        self.seq_len = 0
         self.num_families = 0
         self.max_family_size = 0
 
@@ -359,7 +361,7 @@ class SingleFamilyDataset(SequenceDataset):
             self.family_idx_list.append(ind_family_idx_list)
 
         self.family_name = family_name
-        self.seq_len = max_seq_len
+        self.max_seq_len = max_seq_len
         self.num_families = len(self.family_name_list)
         self.max_family_size = max_family_size
 
@@ -422,10 +424,10 @@ class SingleClusteredSequenceDataset(SequenceDataset):
     def load_data(self):
         max_seq_len = 0
         num_seqs = 0
-        filename = self.working_dir + '/datasets/' + self.dataset
+        filename = os.path.join(self.working_dir, self.dataset)
         with open(filename, 'r') as fa:
             for i, (title, seq) in enumerate(SimpleFastaParser(fa)):
-                name, clu1 = title.split(':')
+                name, clu1 = title.split(':')  # TODO handle different split lengths
                 valid = True
                 for letter in seq:
                     if letter not in self.aa_dict:
@@ -444,6 +446,8 @@ class SingleClusteredSequenceDataset(SequenceDataset):
                 num_seqs += 1
 
         self.clu1_list = list(self.clu1_to_seq_names.keys())
+        self.max_seq_len = max_seq_len
+
         print("Num clusters:", len(self.clu1_list))
         print("Num sequences:", num_seqs)
         print("Max sequence length:", max_seq_len)
@@ -457,6 +461,7 @@ class SingleClusteredSequenceDataset(SequenceDataset):
         :param index: ignored
         :return: batch of size self.batch_size
         """
+        names = []
         seqs = []
         for i in range(self.batch_size):
             # Pick a cluster id90
@@ -465,11 +470,14 @@ class SingleClusteredSequenceDataset(SequenceDataset):
 
             # Then pick a random sequence all in those clusters
             seq_name = np.random.choice(self.clu1_to_seq_names[clu1])
+            names.append(seq_name)
 
             # then grab the associated sequence
             seqs.append(self.name_to_sequence[seq_name])
 
         batch = self.sequences_to_onehot(seqs)
+        batch['names'] = names
+        batch['sequences'] = seqs
         return batch
 
 
@@ -504,7 +512,7 @@ class DoubleClusteredSequenceDataset(SequenceDataset):
         max_seq_len = 0
         num_subclusters = 0
         num_seqs = 0
-        filename = self.working_dir + '/datasets/' + self.dataset
+        filename = os.path.join(self.working_dir, self.dataset)
         with open(filename, 'r') as fa:
             for i, (title, seq) in enumerate(SimpleFastaParser(fa)):
                 name, clu1, clu2 = title.split(':')
@@ -531,6 +539,8 @@ class DoubleClusteredSequenceDataset(SequenceDataset):
                 num_seqs += 1
 
         self.clu1_list = list(self.clu1_to_clu2_to_seq_names.keys())
+        self.max_seq_len = max_seq_len
+
         print("Num clusters:", len(self.clu1_list))
         print("Num subclusters:", num_subclusters)
         print("Num sequences:", num_seqs)
@@ -545,6 +555,7 @@ class DoubleClusteredSequenceDataset(SequenceDataset):
         :param index: ignored
         :return: batch of size self.batch_size
         """
+        names = []
         seqs = []
         for i in range(self.batch_size):
             # Pick a cluster id80
@@ -556,11 +567,14 @@ class DoubleClusteredSequenceDataset(SequenceDataset):
 
             # Then pick a random sequence all in those clusters
             seq_name = np.random.choice(self.clu1_to_clu2_to_seq_names[clu1][clu2])
+            names.append(seq_name)
 
             # then grab the associated sequence
             seqs.append(self.name_to_sequence[seq_name])
 
         batch = self.sequences_to_onehot(seqs)
+        batch['names'] = names
+        batch['sequences'] = seqs
         return batch
 
 
@@ -596,22 +610,28 @@ class IndexedFastaDataset(SequenceDataset):
 
     def load_data(self):
         filename = os.path.join(self.working_dir, self.dataset_idx)
-        names = []
-        offsets = []
+        num_seqs = 0
+        max_name_len = 0
         max_seq_len = 0
         with open(filename, 'rb') as f:
             for line in f:
                 line = line.split(b'\t')
-                name, length, offset = line[0], int(line[1]), int(line[2])
-                names.append(name)
-                offsets.append(offset)
+                name_len, seq_len = len(line[0]), int(line[1])
+                num_seqs += 1
+                if name_len > max_name_len:
+                    max_name_len = name_len
+                if seq_len > max_seq_len:
+                    max_seq_len = seq_len
 
-                if length > max_seq_len:
-                    max_seq_len = length
+            self.names = np.empty(num_seqs, dtype=f'<U{max_name_len}')
+            self.offsets = np.zeros(num_seqs, dtype=np.int)
 
-        self.names = np.array(names)
-        self.offsets = np.array(offsets)
-        del names, offsets
+            f.seek(0)
+            for i, line in enumerate(f):
+                line = line.split(b'\t')
+                self.names[i], self.offsets[i] = line[0], int(line[2])
+
+        self.max_seq_len = max_seq_len
 
         print("Num sequences:", len(self.offsets))
         print("Max sequence length:", max_seq_len)
@@ -705,6 +725,8 @@ class SingleClusteredIndexedSequenceDataset(SequenceDataset):
                 num_seqs += 1
 
         self.clu1_list = list(self.clu1_to_offset.keys())
+        self.max_seq_len = max_seq_len
+
         print("Num clusters:", len(self.clu1_list))
         print("Num sequences:", num_seqs)
         print("Max sequence length:", max_seq_len)
@@ -806,6 +828,8 @@ class DoubleClusteredIndexedSequenceDataset(SequenceDataset):
                 num_seqs += 1
 
         self.clu1_list = list(self.clu1_to_clu2_to_offset.keys())
+        self.max_seq_len = max_seq_len
+
         print("Num clusters:", len(self.clu1_list))
         print("Num subclusters:", num_subclusters)
         print("Num sequences:", num_seqs)

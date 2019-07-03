@@ -73,7 +73,6 @@ class AutoregressiveTrainer:
 
     def train(self, steps=1e8):
         self.model.train()
-        device = self.device
 
         data_iter = iter(self.loader)
         n_eff = self.loader.dataset.n_eff
@@ -85,7 +84,8 @@ class AutoregressiveTrainer:
 
             batch = next(data_iter)
             for key in batch.keys():
-                batch[key] = batch[key].to(device, non_blocking=True)
+                if isinstance(batch[key], torch.Tensor):
+                    batch[key] = batch[key].to(self.device, non_blocking=True)
             data_load_time = time.time()-start
 
             if self.run_fr:
@@ -164,9 +164,9 @@ class AutoregressiveTrainer:
             if self.run_fr:
                 output_logits_f, output_logits_r = self.model(
                     prot_decoder_input_f, prot_mask_decoder, prot_decoder_input_r, prot_mask_decoder)
-                output_logits = torch.cat([output_logits_f, output_logits_r], dim=0)
-                target_seqs = torch.cat([prot_decoder_output_f, prot_decoder_output_r], dim=0)
-                mask = torch.cat([prot_mask_decoder, prot_mask_decoder], dim=0)
+                output_logits = torch.cat((output_logits_f, output_logits_r), dim=0)
+                target_seqs = torch.cat((prot_decoder_output_f, prot_decoder_output_r), dim=0)
+                mask = torch.cat((prot_mask_decoder, prot_mask_decoder), dim=0)
             else:
                 output_logits = self.model(prot_decoder_input_f, prot_mask_decoder)
                 target_seqs = prot_decoder_output_f
@@ -181,9 +181,22 @@ class AutoregressiveTrainer:
         self.model.train()
         return reconstruction_loss, avg_accuracy
 
-    def test(self, data_loader, model_eval=True, num_samples=1):
+    def test(self, data_loader, model_eval=True, num_samples=1, return_logits=False, return_ce=False):
         if model_eval:
             self.model.eval()
+
+        alphabet_size = len(data_loader.dataset.alphabet)
+        batch_size = data_loader.dataset.batch_size
+        max_seq_len = data_loader.dataset.max_seq_len
+
+        ce_fill_val = np.nan
+        logits_f, logits_r, ce_f, ce_r = None, None, None, None
+        if return_logits:
+            logits_f = np.zeros((num_samples, data_loader.dataset.n_eff, alphabet_size, max_seq_len + 1))
+            logits_r = np.zeros((num_samples, data_loader.dataset.n_eff, alphabet_size, max_seq_len + 1))
+        if return_ce:
+            ce_f = np.full((num_samples, data_loader.dataset.n_eff, max_seq_len+1), ce_fill_val)
+            ce_r = np.full((num_samples, data_loader.dataset.n_eff, max_seq_len+1), ce_fill_val)
 
         print('sample    step  step-t  CE-loss     bit-per-char', flush=True)
         output = {
@@ -198,7 +211,7 @@ class AutoregressiveTrainer:
             del output['forward']
             del output['reverse']
 
-        for i_iter in range(num_samples):
+        for i_sample in range(num_samples):
             output_i = {
                 'name': [],
                 'mean': [],
@@ -227,6 +240,7 @@ class AutoregressiveTrainer:
                             output_logits_r, batch['prot_decoder_output_r'], batch['prot_mask_decoder'])
                     else:
                         output_logits_f = self.model(batch['prot_decoder_input'], batch['prot_mask_decoder'])
+                        output_logits_r = None
                         losses = self.model.reconstruction_loss(
                             output_logits_f, batch['prot_decoder_output'], batch['prot_mask_decoder'])
 
@@ -238,6 +252,37 @@ class AutoregressiveTrainer:
                         bitperchar_per_seq = bitperchar_per_seq.mean(0)
                     else:
                         ce_loss_per_seq = ce_loss
+
+                    if return_logits or return_ce:
+                        ce_loss_per_char = losses['ce_loss_per_char']
+                        batch_max_len = ce_loss_per_char.size(-1)
+
+                        if self.run_fr:
+                            if return_logits:
+                                logits_f[i_sample, i_batch * batch_size:(i_batch + 1) * batch_size, :, 0:batch_max_len]\
+                                    = output_logits_f.squeeze(2).cpu().numpy()
+                                logits_r[i_sample, i_batch * batch_size:(i_batch + 1) * batch_size, :, 0:batch_max_len]\
+                                    = output_logits_r.squeeze(2).cpu().numpy()
+
+                            if return_ce:
+                                ce_mask = batch['prot_mask_decoder'] == 0
+                                ce_mask = ce_mask.squeeze(1).squeeze(1).unsqueeze(0)
+                                ce_loss_per_char.masked_fill_(ce_mask, ce_fill_val)
+                                ce_f[i_sample, i_batch * batch_size:(i_batch + 1) * batch_size, 0:batch_max_len] = \
+                                    ce_loss_per_char[0].cpu().numpy()
+                                ce_r[i_sample, i_batch * batch_size:(i_batch + 1) * batch_size, 0:batch_max_len] = \
+                                    ce_loss_per_char[1].cpu().numpy()
+                        else:
+                            if return_logits:
+                                logits_f[i_sample, i_batch * batch_size:(i_batch + 1) * batch_size, :, 0:batch_max_len]\
+                                    = output_logits_f.squeeze(2).cpu().numpy()
+
+                            if return_ce:
+                                ce_mask = batch['prot_mask_decoder'] == 0
+                                ce_mask = ce_mask.squeeze(1).squeeze(1)
+                                ce_loss_per_char.masked_fill_(ce_mask, ce_fill_val)
+                                ce_f[i_sample, i_batch * batch_size:(i_batch + 1) * batch_size, 0:batch_max_len] = \
+                                    ce_loss_per_char.cpu().numpy()
 
                 output_i['name'].extend(batch['names'])
                 output_i['sequence'].extend(batch['sequences'])
@@ -251,7 +296,7 @@ class AutoregressiveTrainer:
                     output_i['reverse'].extend(ce_loss_r.numpy())
 
                 print("{: 4d} {: 8d} {:6.3f} {:11.6f} {:11.6f}".format(
-                    i_iter, i_batch, time.time()-start, ce_loss_per_seq.mean(), bitperchar_per_seq.mean()),
+                    i_sample, i_batch, time.time()-start, ce_loss_per_seq.mean(), bitperchar_per_seq.mean()),
                     flush=True)
 
             output['name'] = output_i['name']
@@ -271,7 +316,19 @@ class AutoregressiveTrainer:
             output['reverse'] = np.array(output['reverse']).mean(0)
 
         self.model.train()
-        return output
+        if return_logits or return_ce:
+            logits_f = logits_f.mean(0)
+            logits_r = logits_r.mean(0)
+            ce_f = ce_f.mean(0)
+            ce_r = ce_r.mean(0)
+            logits = dict()
+            if return_logits:
+                logits = dict(logits_f=logits_f, logits_r=logits_r)
+            if return_ce:
+                logits.update(dict(ce_f=ce_f, ce_r=ce_r))
+            return output, logits
+        else:
+            return output
 
     def save_state(self, last_batch=None):
         snapshot = f"{self.params['snapshot_path']}/{self.params['snapshot_name']}/{self.model.step}.pth"
@@ -381,10 +438,11 @@ class AutoregressiveVAETrainer(AutoregressiveTrainer):
 
             batch = next(data_iter)
             for key in batch.keys():
-                batch[key] = batch[key].to(device, non_blocking=True)
+                if isinstance(batch[key], torch.Tensor):
+                    batch[key] = batch[key].to(self.device, non_blocking=True)
             data_load_time = time.time()-start
 
-            if params['lagging_inference'] and params['lag_inf_aggressive']:
+            if params['lagging_inference'] and self.params['lag_inf_aggressive']:
                 self.model.enable_gradient = 'e'
 
                 # lagging inference variables
@@ -488,8 +546,8 @@ class AutoregressiveVAETrainer(AutoregressiveTrainer):
                 self.model.train()
                 print(f"epoch: {epoch}, active units: {au}f {au_r}r")
                 print(f"pre mi: {pre_mi:.4f}, cur mi: {cur_mi:.4f}")
-                if params['lag_inf_aggressive'] and cur_mi < pre_mi:
-                    params['lag_inf_aggressive'] = False
+                if self.params['lag_inf_aggressive'] and cur_mi < pre_mi:
+                    self.params['lag_inf_aggressive'] = False
                     print("STOP BURNING")
                 pre_mi = cur_mi
 
@@ -527,6 +585,8 @@ def calc_mi(model, test_data_batch, run_fr=False, device=torch.device('cpu')):
 
 def calc_au(model, test_data_batch, delta=0.01, run_fr=False, device=torch.device('cpu')):
     """compute the number of active units
+
+    Adapted from https://github.com/jxhe/vae-lagging-encoder
     """
     means_sum = 0
     cnt = 0

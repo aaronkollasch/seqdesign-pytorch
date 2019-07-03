@@ -7,7 +7,6 @@ import shutil
 import contextlib
 
 import numpy as np
-import torch
 
 
 def recursive_update(orig_dict, update_dict):
@@ -18,18 +17,6 @@ def recursive_update(orig_dict, update_dict):
         else:
             orig_dict[key] = val
     return orig_dict
-
-
-def comb_losses(losses_f, losses_r):
-    losses_comb = {}
-    for key in losses_f.keys():
-        if 'per_seq' in key:
-            losses_comb[key] = torch.stack((losses_f[key], losses_r[key]))
-        else:
-            losses_comb[key] = losses_f[key] + losses_r[key]
-            losses_comb[key + '_f'] = losses_f[key]
-            losses_comb[key + '_r'] = losses_r[key]
-    return losses_comb
 
 
 # https://stackoverflow.com/questions/49555991/can-i-create-a-local-numpy-random-seed
