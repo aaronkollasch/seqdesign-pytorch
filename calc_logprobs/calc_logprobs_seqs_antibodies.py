@@ -11,6 +11,7 @@ sys.path.append("..")
 import autoregressive_model
 import autoregressive_train
 import data_loaders
+from utils import get_github_head_hash
 from tf_reader import TFReader
 
 parser = argparse.ArgumentParser(description="Calculate the log probability of mutated sequences.")
@@ -52,6 +53,8 @@ if device.type == 'cuda':
     print('Memory Usage:')
     print('Allocated:', round(torch.cuda.memory_allocated(0)/1024**3, 1), 'GB')
     print('Cached:   ', round(torch.cuda.memory_cached(0)/1024**3, 1), 'GB')
+
+print("git hash:", str(get_github_head_hash()))
 print()
 
 dataset = data_loaders.FastaDataset(

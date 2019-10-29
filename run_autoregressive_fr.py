@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import sys
+import os
 import argparse
 import time
 import json
@@ -12,10 +13,15 @@ import data_loaders
 import autoregressive_model
 import autoregressive_train
 import model_logging
-from utils import get_cuda_version, get_cudnn_version
+from utils import get_cuda_version, get_cudnn_version, get_github_head_hash, Tee
 
 working_dir = '/n/groups/marks/users/aaron/autoregressive'
 data_dir = '/n/groups/marks/projects/autoregressive'
+
+
+###################
+# PARSE ARGUMENTS #
+###################
 
 parser = argparse.ArgumentParser(description="Train an autoregressive model on a collection of sequences.")
 parser.add_argument("--channels", type=int, default=48,
@@ -30,6 +36,8 @@ parser.add_argument("--num-data-workers", type=int, default=4,
                     help="Number of workers to load data")
 parser.add_argument("--restore", type=str, default=None,
                     help="Snapshot path for restoring a model to continue training.")
+parser.add_argument("--run-name", type=str, default=None,
+                    help="Name of run")
 parser.add_argument("--r-seed", type=int, default=42,
                     help="Random seed")
 parser.add_argument("--dropout-p", type=float, default=0.5,
@@ -38,8 +46,19 @@ parser.add_argument("--no-cuda", action='store_true',
                     help="Disable GPU training")
 args = parser.parse_args()
 
-run_name = f"{args.dataset}_elu_channels-{args.channels}_dropout-{args.dropout_p}_rseed-{args.r_seed}" \
-    f"_start-{time.strftime('%y%b%d_%H%M', time.localtime())}"
+
+########################
+# MAKE RUN DESCRIPTORS #
+########################
+
+if args.run_name is None:
+    args.run_name = f"{args.dataset.split('/')[-1].split('.')[0]}_elu_channels-{args.channels}" \
+        f"_dropout-{args.dropout_p}_rseed-{args.r_seed}" \
+        f"_start-{time.strftime('%y%b%d_%H%M', time.localtime())}"
+
+restore_args = " \\\n  ".join(sys.argv[1:])
+if "--run-name" not in restore_args:
+    restore_args += f" \\\n  --run-name {args.run_name}"
 
 sbatch_executable = f"""#!/bin/bash
 #SBATCH -c 4                               # Request one core
@@ -55,17 +74,22 @@ pwd
 module load gcc/6.2.0 cuda/9.0
 srun stdbuf -oL -eL {sys.executable} \\
   {sys.argv[0]} \\
-  --dataset {args.dataset} --num-iterations {args.num_iterations} \\
-  --channels {args.channels} --dropout-p {args.dropout_p} --r-seed {args.r_seed} \\
-  --restore {{restore}}
+  {restore_args}
 """
 
+
+####################
+# SET RANDOM SEEDS #
+####################
+
 if args.restore is not None:
-    # prevent from repeating batches when restoring at intermediate point
-    args.r_seed += int(hashlib.sha1(args.restore.encode()).hexdigest(), 16)
+    # prevent from repeating batches/seed when restoring at intermediate point
+    # script is repeatable as long as restored at same step
+    # assumes restore arg of *[_/][step].pth
+    args.r_seed += int(args.restore.split('_')[-1].split('/')[-1].split('.')[0])
     args.r_seed = args.r_seed % (2 ** 32 - 1)  # limit of np.random.seed
 
-
+np.random.seed(args.r_seed)
 torch.manual_seed(args.r_seed)
 torch.cuda.manual_seed_all(args.r_seed)
 
@@ -73,6 +97,13 @@ torch.cuda.manual_seed_all(args.r_seed)
 def _init_fn(worker_id):
     np.random.seed(args.r_seed + worker_id)
 
+
+#####################
+# PRINT SYSTEM INFO #
+#####################
+
+os.makedirs(f'logs/{args.run_name}', exist_ok=True)
+log_f = Tee(f'logs/{args.run_name}/log.txt', 'a')
 
 print("OS: ", sys.platform)
 print("Python: ", sys.version)
@@ -89,9 +120,11 @@ if device.type == 'cuda':
     print('Cached:   ', round(torch.cuda.memory_cached(0)/1024**3, 1), 'GB')
     print(get_cuda_version())
     print("CuDNN Version ", get_cudnn_version())
+
+print("git hash:", str(get_github_head_hash()))
 print()
 
-print("Run:", run_name)
+print("Run:", args.run_name)
 
 dataset = data_loaders.SingleFamilyDataset(
     batch_size=args.batch_size,
@@ -99,6 +132,8 @@ dataset = data_loaders.SingleFamilyDataset(
     dataset=args.dataset,
     matching=True,
     unlimited_epoch=True,
+    output_shape='NCHW',
+    output_types='decoder',
 )
 loader = data_loaders.GeneratorDataLoader(
     dataset,
@@ -106,6 +141,11 @@ loader = data_loaders.GeneratorDataLoader(
     pin_memory=True,
     worker_init_fn=_init_fn
 )
+
+
+##############
+# LOAD MODEL #
+##############
 
 if args.restore is not None:
     print("Restoring model from:", args.restore)
@@ -120,12 +160,17 @@ else:
     model = autoregressive_model.AutoregressiveFR(channels=args.channels, dropout_p=args.dropout_p)
 model.to(device)
 
+
+################
+# RUN TRAINING #
+################
+
 trainer = autoregressive_train.AutoregressiveTrainer(
     model=model,
     data_loader=loader,
     params=trainer_params,
     snapshot_path=working_dir + '/snapshots',
-    snapshot_name=run_name,
+    snapshot_name=args.run_name,
     snapshot_interval=args.num_iterations // 10,
     snapshot_exec_template=sbatch_executable,
     device=device,
@@ -134,16 +179,23 @@ trainer = autoregressive_train.AutoregressiveTrainer(
         log_interval=500,
         validation_interval=1000,
         generate_interval=5000,
-        log_dir=working_dir + '/logs/' + run_name,
-        print_output=True
+        log_dir=working_dir + '/logs/' + args.run_name,
+        print_output=True,
     )
 )
 if args.restore is not None:
     trainer.load_state(checkpoint)
 
+print()
+print("Model:", model.__class__.__name__)
 print("Hyperparameters:", json.dumps(model.hyperparams, indent=4))
+print("Trainer:", trainer.__class__.__name__)
 print("Training parameters:", json.dumps(
     {key: value for key, value in trainer.params.items() if key != 'snapshot_exec_template'}, indent=4))
+print("Dataset:", dataset.__class__.__name__)
+print("Dataset parameters:", json.dumps(dataset.params, indent=4))
 print("Num trainable parameters:", model.parameter_count())
+print(f"Training for {args.num_iterations - model.step} iterations")
 
+trainer.save_state()
 trainer.train(steps=args.num_iterations)

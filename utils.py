@@ -7,6 +7,7 @@ import shutil
 import contextlib
 
 import numpy as np
+import git
 
 
 def recursive_update(orig_dict, update_dict):
@@ -102,3 +103,46 @@ def get_cudnn_version():
             return "Cannot find CUDNN version"
     else:
         return "No CUDNN in this machine"
+
+
+def get_github_head_hash():
+    """
+    https://stackoverflow.com/questions/14989858/get-the-current-git-hash-in-a-python-script
+    :return:
+    """
+    try:
+        repo = git.Repo(search_parent_directories=True)
+        return repo.head.object.hexsha
+    except git.GitError:
+        return None
+
+
+class Tee(object):
+    """Duplicate output to file and sys.stdout
+    From https://stackoverflow.com/questions/616645/how-to-duplicate-sys-stdout-to-a-log-file"""
+
+    def __init__(self, name, mode):
+        self.file = open(name, mode)
+        self.stdout = sys.stdout
+        sys.stdout = self
+
+    def __del__(self):
+        self.close()
+
+    def close(self):
+        sys.stdout = self.stdout
+        self.file.close()
+
+    def write(self, data):
+        self.file.write(data)
+        self.stdout.write(data)
+
+    def flush(self):
+        self.file.flush()
+        self.stdout.flush()
+
+    def __enter__(self):
+        pass
+
+    def __exit__(self, _type, _value, _traceback):
+        self.close()

@@ -11,6 +11,7 @@ sys.path.append("..")
 import autoregressive_model
 import autoregressive_train
 import data_loaders
+from utils import get_github_head_hash
 from tf_reader import TFReader
 
 parser = argparse.ArgumentParser(description="Calculate the log probability of mutated sequences.")
@@ -20,6 +21,10 @@ parser.add_argument("--input", type=str, default='', required=True,
                     help="Directory and filename of the input data.")
 parser.add_argument("--output", type=str, default='output', required=True,
                     help="Directory and filename of the output data.")
+parser.add_argument("--save-logits", action='store_true',
+                    help="Save logprobs matrices.")
+parser.add_argument("--save-ce", action='store_true',
+                    help="Save cross entropy matrices.")
 parser.add_argument("--channels", type=int, default=48,
                     help="Number of channels.")
 parser.add_argument("--num-samples", type=int, default=1,
@@ -40,6 +45,7 @@ parser.add_argument("--from-tf", action='store_true',
 
 args = parser.parse_args()
 
+print('Call:', ' '.join(sys.argv))
 print("OS: ", sys.platform)
 print("Python: ", sys.version)
 print("PyTorch: ", torch.__version__)
@@ -53,6 +59,8 @@ if device.type == 'cuda':
     print('Memory Usage:')
     print('Allocated:', round(torch.cuda.memory_allocated(0)/1024**3, 1), 'GB')
     print('Cached:   ', round(torch.cuda.memory_cached(0)/1024**3, 1), 'GB')
+
+print("git hash:", str(get_github_head_hash()))
 print()
 
 dataset = data_loaders.VHAntibodyFastaDataset(
@@ -99,7 +107,14 @@ trainer = autoregressive_train.AutoregressiveTrainer(
     data_loader=None,
     device=device,
 )
-output = trainer.test(loader, model_eval=False, num_samples=args.num_samples)
+output = trainer.test(loader, model_eval=False, num_samples=args.num_samples, return_logits=args.save_logits, return_ce=args.save_ce)
+if args.save_logits or args.save_ce:
+    output, logits = output
+    logits_path = os.path.splitext(args.output)[0]
+    os.makedirs(logits_path, exist_ok=True)
+    for key, value in logits.items():
+        np.save(f"{logits_path}/{key}.npy", value)
+
 output = pd.DataFrame(output, columns=output.keys())
 output.to_csv(args.output, index=False)
 print("Done!")

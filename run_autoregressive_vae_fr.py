@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import sys
+import os
 import argparse
 import time
 import json
@@ -11,7 +12,7 @@ import data_loaders
 import autoregressive_model
 import autoregressive_train
 import model_logging
-from utils import get_cuda_version, get_cudnn_version
+from utils import get_cuda_version, get_cudnn_version, get_github_head_hash, Tee
 
 working_dir = '/n/groups/marks/users/aaron/autoregressive'
 data_dir = '/n/groups/marks/projects/autoregressive'
@@ -69,6 +70,9 @@ def _init_fn(worker_id):
     np.random.seed(args.r_seed + worker_id)
 
 
+os.makedirs(f'logs/{args.run_name}', exist_ok=True)
+log_f = Tee(f'logs/{args.run_name}/log.txt', 'a')
+
 print("OS: ", sys.platform)
 print("Python: ", sys.version)
 print("PyTorch: ", torch.__version__)
@@ -84,6 +88,8 @@ if device.type == 'cuda':
     print('Cached:   ', round(torch.cuda.memory_cached(0)/1024**3, 1), 'GB')
     print(get_cuda_version())
     print("CuDNN Version ", get_cudnn_version())
+
+print("git hash:", str(get_github_head_hash()))
 print()
 
 print("Run:", run_name)
@@ -94,6 +100,8 @@ dataset = data_loaders.SingleFamilyDataset(
     dataset=args.dataset,
     matching=True,
     unlimited_epoch=True,
+    output_shape='NCHW',
+    output_types='decoder',
 )
 loader = data_loaders.GeneratorDataLoader(
     dataset,

@@ -17,21 +17,24 @@ from utils import get_cuda_version, get_cudnn_version, get_github_head_hash, Tee
 working_dir = '.'  # '/n/groups/marks/users/aaron/autoregressive'
 data_dir = './datasets'  # '/n/groups/marks/users/aaron/autoregressive'
 
+
 ###################
 # PARSE ARGUMENTS #
 ###################
 
 parser = argparse.ArgumentParser(description="Train an autoregressive model on a collection of sequences.")
-parser.add_argument("--channels", type=int, default=48,
+parser.add_argument("--channels", type=int, default=24,
                     help="Number of channels.")
 parser.add_argument("--batch-size", type=int, default=30,
                     help="Batch size.")
-parser.add_argument("--num-iterations", type=int, default=250005,
+parser.add_argument("--num-iterations", type=int, default=50000,
                     help="Number of iterations to run the model.")
 parser.add_argument("--dataset", type=str, default=None,
                     help="Dataset name for fitting model. Alignment weights must be computed beforehand.")
-parser.add_argument("--dataset-type", type=str, default='double_clustered',
-                    help="Level of clustering in dataset to sample from.")
+parser.add_argument("--include-vh", action='store_true',
+                    help="Include an encoding of the VH gene in the input.")
+parser.add_argument("--include-vl", action='store_true',
+                    help="Include an encoding of the VL gene in the input.")
 parser.add_argument("--num-data-workers", type=int, default=4,
                     help="Number of workers to load data")
 parser.add_argument("--restore", type=str, default=None,
@@ -53,29 +56,20 @@ args = parser.parse_args()
 
 if args.run_name is None:
     args.run_name = f"{args.dataset.split('/')[-1].split('.')[0]}_elu_channels-{args.channels}" \
-        f"_dropout-{args.dropout_p}_rseed-{args.r_seed}" \
-        f"_start-{time.strftime('%y%b%d_%H%M', time.localtime())}"
+        f"_dropout-{args.dropout_p}_rseed-{args.r_seed}_start-{time.strftime('%y%b%d_%H%M', time.localtime())}"
 
-restore_args = [
-    f"--dataset {args.dataset}",
-    f"--num-iterations {args.num_iterations}",
-    f"--channels {args.channels}",
-    f"--batch-size {args.batch_size}",
-    f"--dropout-p {args.dropout_p}",
-    f"--r-seed {args.r_seed}",
-    f"--restore {{restore}}",
-    f"--run-name {args.run_name}",
-]
-restore_args = " \\\n  ".join(restore_args)
+restore_args = " \\\n  ".join(sys.argv[1:])
+if "--run-name" not in restore_args:
+    restore_args += f" \\\n  --run-name {args.run_name}"
 
 sbatch_executable = f"""#!/bin/bash
 #SBATCH -c 4                               # Request one core
 #SBATCH -N 1                               # Request one node (if you request more than one core with -c, also using
                                            # -N 1 means all cores will be on the same node)
-#SBATCH -t 2-11:59                         # Runtime in D-HH:MM format
+#SBATCH -t 0-11:59                         # Runtime in D-HH:MM format
 #SBATCH -p gpu                             # Partition to run in
 #SBATCH --gres=gpu:1
-#SBATCH --mem=40G                          # Memory total in MB (for all cores)
+#SBATCH --mem=30G                          # Memory total in MB (for all cores)
 #SBATCH -o slurm_files/slurm-%j.out        # File to which STDOUT + STDERR will be written, including job ID in filename
 hostname
 pwd
@@ -134,30 +128,14 @@ print()
 
 print("Run:", args.run_name)
 
-
-#############
-# LOAD DATA #
-#############
-
-if args.dataset_type in ['double', 'double_clustered']:
-    data_loader = data_loaders.DoubleClusteredSequenceDataset
-elif args.dataset_type in ['double_indexed', 'double_clustered_indexed']:
-    data_loader = data_loaders.DoubleClusteredIndexedSequenceDataset
-elif args.dataset_type in ['single', 'single_clustered']:
-    data_loader = data_loaders.SingleClusteredSequenceDataset
-elif args.dataset_type in ['single_indexed', 'single_clustered_indexed']:
-    data_loader = data_loaders.SingleClusteredIndexedSequenceDataset
-elif args.dataset_type in ['indexed']:
-    data_loader = data_loaders.IndexedFastaDataset
-else:
-    data_loader = data_loaders.FastaDataset
-
-dataset = data_loader(
+dataset = data_loaders.IPISingleClusteredSequenceDataset(
     batch_size=args.batch_size,
     working_dir=data_dir,
     dataset=args.dataset,
     matching=True,
     unlimited_epoch=True,
+    include_vh=args.include_vh,
+    include_vl=args.include_vl,
     output_shape='NCHW',
     output_types='decoder',
 )
@@ -181,8 +159,8 @@ if args.restore is not None:
     trainer_params = checkpoint['train_params']
     model = autoregressive_model.AutoregressiveFR(dims=dims, hyperparams=hyperparams, dropout_p=args.dropout_p)
 else:
-    dims = {'input': len(dataset.alphabet)}
-    hyperparams = {'random_seed': args.r_seed}
+    dims = {'input': dataset.input_dim}
+    hyperparams = {'encoder': {'num_dilation_blocks': 3, 'num_layers': 5}, 'random_seed': args.r_seed}
     checkpoint = args.restore
     trainer_params = None
     model = autoregressive_model.AutoregressiveFR(
@@ -207,7 +185,7 @@ trainer = autoregressive_train.AutoregressiveTrainer(
     logger=model_logging.TensorboardLogger(
         log_interval=500,
         validation_interval=None,
-        generate_interval=5000,
+        generate_interval=None,
         log_dir=working_dir + '/logs/' + args.run_name,
         print_output=True,
     )
