@@ -20,6 +20,7 @@ class AutoregressiveTrainer:
         'snapshot_path': None,
         'snapshot_name': 'snapshot',
         'snapshot_interval': 1000,
+        'fr_separate_batches': True,
     }
 
     def __init__(
@@ -82,23 +83,40 @@ class AutoregressiveTrainer:
             self.model.step = step
             start = time.time()
 
-            batch = next(data_iter)
-            for key in batch.keys():
-                if isinstance(batch[key], torch.Tensor):
-                    batch[key] = batch[key].to(self.device, non_blocking=True)
-            data_load_time = time.time()-start
-
             if self.run_fr:
+                if self.params['fr_separate_batches']:
+                    batch_f = next(data_iter)
+                    batch_r = next(data_iter)
+                    batch = {
+                        'decoder_input': batch_f['decoder_input'], 'decoder_output': batch_f['decoder_output'],
+                        'decoder_mask': batch_f['decoder_mask'],
+                        'decoder_input_r': batch_r['decoder_input_r'], 'decoder_output_r': batch_r['decoder_output_r'],
+                        'decoder_mask_r': batch_r['decoder_mask'],
+                    }
+                else:
+                    batch = next(data_iter)
+                    batch['decoder_mask_r'] = batch['decoder_mask']
+                for key in batch.keys():
+                    if isinstance(batch[key], torch.Tensor):
+                        batch[key] = batch[key].to(self.device, non_blocking=True)
+                data_load_time = time.time() - start
+
                 output_logits_f, output_logits_r = self.model(
-                    batch['prot_decoder_input'], batch['prot_mask_decoder'],
-                    batch['prot_decoder_input_r'], batch['prot_mask_decoder'])
+                    batch['decoder_input'], batch['decoder_mask'],
+                    batch['decoder_input_r'], batch['decoder_mask_r'])
                 losses = self.model.calculate_loss(
-                    output_logits_f, batch['prot_decoder_output'], batch['prot_mask_decoder'], n_eff,
-                    output_logits_r, batch['prot_decoder_output_r'], batch['prot_mask_decoder'], n_eff)
+                    output_logits_f, batch['decoder_output'], batch['decoder_mask'], n_eff,
+                    output_logits_r, batch['decoder_output_r'], batch['decoder_mask_r'], n_eff)
             else:
-                output_logits_f = self.model(batch['prot_decoder_input'], batch['prot_mask_decoder'])
+                batch = next(data_iter)
+                for key in batch.keys():
+                    if isinstance(batch[key], torch.Tensor):
+                        batch[key] = batch[key].to(self.device, non_blocking=True)
+                data_load_time = time.time() - start
+
+                output_logits_f = self.model(batch['decoder_input'], batch['decoder_mask'])
                 losses = self.model.calculate_loss(
-                    output_logits_f, batch['prot_decoder_output'], batch['prot_mask_decoder'], n_eff)
+                    output_logits_f, batch['decoder_output'], batch['decoder_mask'], n_eff)
 
             if step in [1, 10, 100, 1000, 10000, 100000]:
                 try:
@@ -141,7 +159,7 @@ class AutoregressiveTrainer:
                     losses[key] /= 2
             losses.update({'grad_norm': total_norm})
 
-            if step in [2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000, 2500000] or \
+            if step in [1000, 2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000, 2500000] or \
                     step % self.params['snapshot_interval'] == 0:
                 if self.params['snapshot_path'] is None:
                     continue
@@ -233,19 +251,19 @@ class AutoregressiveTrainer:
                 with torch.no_grad():
                     if self.run_fr:
                         output_logits_f, output_logits_r = self.model(
-                            batch['prot_decoder_input'], batch['prot_mask_decoder'],
-                            batch['prot_decoder_input_r'], batch['prot_mask_decoder'])
+                            batch['decoder_input'], batch['decoder_mask'],
+                            batch['decoder_input_r'], batch['decoder_mask'])
                         losses = self.model.reconstruction_loss(
-                            output_logits_f, batch['prot_decoder_output'], batch['prot_mask_decoder'],
-                            output_logits_r, batch['prot_decoder_output_r'], batch['prot_mask_decoder'])
+                            output_logits_f, batch['decoder_output'], batch['decoder_mask'],
+                            output_logits_r, batch['decoder_output_r'], batch['decoder_mask'])
                     else:
-                        output_logits_f = self.model(batch['prot_decoder_input'], batch['prot_mask_decoder'])
+                        output_logits_f = self.model(batch['decoder_input'], batch['decoder_mask'])
                         output_logits_r = None
                         losses = self.model.reconstruction_loss(
-                            output_logits_f, batch['prot_decoder_output'], batch['prot_mask_decoder'])
+                            output_logits_f, batch['decoder_output'], batch['decoder_mask'])
 
-                    ce_loss = losses['ce_loss_per_seq'].cpu()
-                    bitperchar_per_seq = losses['bitperchar_per_seq'].cpu()
+                    ce_loss = torch.stack((losses['ce_loss_per_seq_f'], losses['ce_loss_per_seq_r'])).cpu()
+                    bitperchar_per_seq = torch.stack((losses['bitperchar_per_seq_f'], losses['bitperchar_per_seq_r'])).cpu()
 
                     if self.run_fr:
                         ce_loss_per_seq = ce_loss.mean(0)
@@ -254,7 +272,7 @@ class AutoregressiveTrainer:
                         ce_loss_per_seq = ce_loss
 
                     if return_logits or return_ce:
-                        ce_loss_per_char = losses['ce_loss_per_char']
+                        ce_loss_per_char = torch.stack((losses['ce_loss_per_char_f'], losses['ce_loss_per_char_r']))
                         batch_max_len = ce_loss_per_char.size(-1)
 
                         if self.run_fr:
@@ -265,7 +283,7 @@ class AutoregressiveTrainer:
                                     = output_logits_r.squeeze(2).cpu().numpy()
 
                             if return_ce:
-                                ce_mask = batch['prot_mask_decoder'] == 0
+                                ce_mask = batch['decoder_mask'] == 0
                                 ce_mask = ce_mask.squeeze(1).squeeze(1).unsqueeze(0)
                                 ce_loss_per_char.masked_fill_(ce_mask, ce_fill_val)
                                 ce_f[i_sample, i_batch * batch_size:(i_batch + 1) * batch_size, 0:batch_max_len] = \
@@ -278,7 +296,7 @@ class AutoregressiveTrainer:
                                     = output_logits_f.squeeze(2).cpu().numpy()
 
                             if return_ce:
-                                ce_mask = batch['prot_mask_decoder'] == 0
+                                ce_mask = batch['decoder_mask'] == 0
                                 ce_mask = ce_mask.squeeze(1).squeeze(1)
                                 ce_loss_per_char.masked_fill_(ce_mask, ce_fill_val)
                                 ce_f[i_sample, i_batch * batch_size:(i_batch + 1) * batch_size, 0:batch_max_len] = \
@@ -317,14 +335,14 @@ class AutoregressiveTrainer:
 
         self.model.train()
         if return_logits or return_ce:
-            logits_f = logits_f.mean(0)
-            logits_r = logits_r.mean(0)
-            ce_f = ce_f.mean(0)
-            ce_r = ce_r.mean(0)
             logits = dict()
             if return_logits:
+                logits_f = logits_f.mean(0)
+                logits_r = logits_r.mean(0)
                 logits = dict(logits_f=logits_f, logits_r=logits_r)
             if return_ce:
+                ce_f = ce_f.mean(0)
+                ce_r = ce_r.mean(0)
                 logits.update(dict(ce_f=ce_f, ce_r=ce_r))
             return output, logits
         else:
@@ -457,22 +475,22 @@ class AutoregressiveVAETrainer(AutoregressiveTrainer):
 
                     if self.run_fr:
                         output_logits_f, kl_embedding_f, output_logits_r, kl_embedding_r = self.model(
-                            sub_batch['prot_decoder_input'], sub_batch['prot_mask_decoder'],
-                            sub_batch['prot_decoder_input_r'], sub_batch['prot_mask_decoder'])
+                            sub_batch['decoder_input'], sub_batch['decoder_mask'],
+                            sub_batch['decoder_input_r'], sub_batch['decoder_mask'])
                         losses = self.model.calculate_loss(
                             output_logits_f, kl_embedding_f,
-                            sub_batch['prot_decoder_output'], sub_batch['prot_mask_decoder'], n_eff,
+                            sub_batch['decoder_output'], sub_batch['decoder_mask'], n_eff,
                             output_logits_r, kl_embedding_f,
-                            sub_batch['prot_decoder_output_r'], sub_batch['prot_mask_decoder'], n_eff)
+                            sub_batch['decoder_output_r'], sub_batch['decoder_mask'], n_eff)
                     else:
                         output_logits_f, kl_embedding_f = self.model(
-                            sub_batch['prot_decoder_input'], sub_batch['prot_mask_decoder'])
+                            sub_batch['decoder_input'], sub_batch['decoder_mask'])
                         losses = self.model.calculate_loss(
                             output_logits_f, kl_embedding_f,
-                            sub_batch['prot_decoder_output'], sub_batch['prot_mask_decoder'], n_eff)
+                            sub_batch['decoder_output'], sub_batch['decoder_mask'], n_eff)
 
                     burn_cur_loss += losses['loss_per_seq'].sum().item()
-                    burn_total_chars += sub_batch['prot_mask_decoder'].sum().item()
+                    burn_total_chars += sub_batch['decoder_mask'].sum().item()
                     loss = losses['loss']
                     # ce_loss = losses['ce_loss']
                     # kl_loss = losses['kl_embedding_loss']
@@ -508,15 +526,15 @@ class AutoregressiveVAETrainer(AutoregressiveTrainer):
 
             if self.run_fr:
                 output_logits_f, kl_embedding_f, output_logits_r, kl_embedding_r = self.model(
-                    batch['prot_decoder_input'], batch['prot_mask_decoder'],
-                    batch['prot_decoder_input_r'], batch['prot_mask_decoder'])
+                    batch['decoder_input'], batch['decoder_mask'],
+                    batch['decoder_input_r'], batch['decoder_mask'])
                 losses = self.model.calculate_loss(
-                    output_logits_f, kl_embedding_f, batch['prot_decoder_output'], batch['prot_mask_decoder'], n_eff,
-                    output_logits_r, kl_embedding_f, batch['prot_decoder_output_r'], batch['prot_mask_decoder'], n_eff)
+                    output_logits_f, kl_embedding_f, batch['decoder_output'], batch['decoder_mask'], n_eff,
+                    output_logits_r, kl_embedding_f, batch['decoder_output_r'], batch['decoder_mask'], n_eff)
             else:
-                output_logits_f, kl_embedding_f = self.model(batch['prot_decoder_input'], batch['prot_mask_decoder'])
+                output_logits_f, kl_embedding_f = self.model(batch['decoder_input'], batch['decoder_mask'])
                 losses = self.model.calculate_loss(
-                    output_logits_f, kl_embedding_f, batch['prot_decoder_output'], batch['prot_mask_decoder'], n_eff)
+                    output_logits_f, kl_embedding_f, batch['decoder_output'], batch['decoder_mask'], n_eff)
 
             loss = losses['loss']
             ce_loss = losses['ce_loss']
@@ -567,17 +585,17 @@ def calc_mi(model, test_data_batch, run_fr=False, device=torch.device('cpu')):
     mi = 0
     num_examples = 0
     for batch_data in test_data_batch:
-        batch_size = batch_data['prot_decoder_input'].size(0)
+        batch_size = batch_data['decoder_input'].size(0)
         num_examples += batch_size
         if run_fr:
             prot_decoder_input, prot_mask_decoder, prot_decoder_input_r = \
-                batch_data['prot_decoder_input'].to(device), batch_data['prot_mask_decoder'].to(device), \
-                batch_data['prot_decoder_input_r'].to(device)
+                batch_data['decoder_input'].to(device), batch_data['decoder_mask'].to(device), \
+                batch_data['decoder_input_r'].to(device)
             mutual_info = model.calc_mi(prot_decoder_input, prot_mask_decoder,
                                         prot_decoder_input_r, prot_mask_decoder)
         else:
             prot_decoder_input, prot_mask_decoder = \
-                batch_data['prot_decoder_input'].to(device), batch_data['prot_mask_decoder'].to(device)
+                batch_data['decoder_input'].to(device), batch_data['decoder_mask'].to(device)
             mutual_info = model.calc_mi(prot_decoder_input, prot_mask_decoder)
         mi += mutual_info * batch_size
     return mi / num_examples
@@ -594,13 +612,13 @@ def calc_au(model, test_data_batch, delta=0.01, run_fr=False, device=torch.devic
     for batch_data in test_data_batch:
         if run_fr:
             prot_decoder_input, prot_mask_decoder, prot_decoder_input_r = \
-                batch_data['prot_decoder_input'].to(device), batch_data['prot_mask_decoder'].to(device), \
-                batch_data['prot_decoder_input_r'].to(device)
+                batch_data['decoder_input'].to(device), batch_data['decoder_mask'].to(device), \
+                batch_data['decoder_input_r'].to(device)
             mu_f, _, mu_r, _ = model.encode(prot_decoder_input, prot_mask_decoder,
                                             prot_decoder_input_r, prot_mask_decoder)
         else:
             prot_decoder_input, prot_mask_decoder = \
-                batch_data['prot_decoder_input'].to(device), batch_data['prot_mask_decoder'].to(device)
+                batch_data['decoder_input'].to(device), batch_data['decoder_mask'].to(device)
             mu_f, _ = model.encode(prot_decoder_input, prot_mask_decoder)
             mu_r = None
         means_sum += mu_f.sum(dim=0, keepdim=True)
@@ -618,13 +636,13 @@ def calc_au(model, test_data_batch, delta=0.01, run_fr=False, device=torch.devic
     for batch_data in test_data_batch:
         if run_fr:
             prot_decoder_input, prot_mask_decoder, prot_decoder_input_r = \
-                batch_data['prot_decoder_input'].to(device), batch_data['prot_mask_decoder'].to(device), \
-                batch_data['prot_decoder_input_r'].to(device)
+                batch_data['decoder_input'].to(device), batch_data['decoder_mask'].to(device), \
+                batch_data['decoder_input_r'].to(device)
             mu_f, _, mu_r, _ = model.encode(prot_decoder_input, prot_mask_decoder,
                                             prot_decoder_input_r, prot_mask_decoder)
         else:
             prot_decoder_input, prot_mask_decoder = \
-                batch_data['prot_decoder_input'].to(device), batch_data['prot_mask_decoder'].to(device)
+                batch_data['decoder_input'].to(device), batch_data['decoder_mask'].to(device)
             mu_f, _ = model.encode(prot_decoder_input, prot_mask_decoder)
             mu_r = None
         var_sum += ((mu_f - mean_mean) ** 2).sum(dim=0)
