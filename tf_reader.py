@@ -25,13 +25,11 @@ class TFReader:
     def load_autoregressive(self, model, model_name):
         self.load_conv2d(model.start_conv, model_name + 'EncoderPrepareInput/Features1D/')
 
-        for i_block in range(6):
+        for i_block, block in enumerate(model.dilation_blocks):
             block_name = model_name + f'Encoder/DilationBlock{i_block + 1}/ConvNet1D/'
-            block = model.dilation_blocks[i_block]
             dilation_schedule = block.dilations
 
-            for i_layer in range(9):
-                layer = block.dilation_layers[i_layer]
+            for i_layer, layer in enumerate(block.dilation_layers):
                 layer_name = block_name + f'Conv{i_layer}_3x{dilation_schedule[i_layer]}/'
 
                 self.load_layer_norm(layer.layernorm_1, layer_name + 'ScaleAndShift/')
