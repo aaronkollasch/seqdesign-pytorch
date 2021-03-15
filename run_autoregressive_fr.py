@@ -15,8 +15,8 @@ import autoregressive_train
 import model_logging
 from utils import get_cuda_version, get_cudnn_version, get_github_head_hash, Tee
 
-working_dir = '/n/groups/marks/users/aaron/autoregressive'
-data_dir = '/n/groups/marks/projects/autoregressive'
+working_dir = '.'  # '/n/groups/marks/users/aaron/autoregressive'
+data_dir = '.'  # '/n/groups/marks/projects/autoregressive'
 
 
 ###################
