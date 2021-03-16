@@ -17,6 +17,12 @@ class TFReader:
         self.unused_keys = list(self.reader.get_variable_to_shape_map().keys())
         self.unused_keys = [key for key in self.unused_keys if not key.startswith("Backprop")]
 
+    def get_checkpoint_legacy_version(self):
+        if 'Forward/Encoder/DilationBlock1/ConvNet1D/Conv8_3x200/DilatedConvGen8/W' in self.unused_keys:
+            return 0
+        else:
+            return 1
+
     def load_autoregressive_fr(self, model):
         for m, m_name in zip([model.model['model_f'], model.model['model_r']],
                              ['Forward/', 'Reverse/']):

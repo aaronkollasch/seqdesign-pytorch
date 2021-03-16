@@ -8,7 +8,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 import torch.utils.data
 
-from model_logging import Logger
+from seqdesign_pt.model_logging import Logger
 
 
 class AutoregressiveTrainer:
@@ -172,32 +172,32 @@ class AutoregressiveTrainer:
 
     def validate(self, batch_size=48):
         return 0.0, 0.0
-        self.model.eval()
-        with torch.no_grad():
-            (
-                prot_decoder_input_f, prot_decoder_output_f, prot_mask_decoder,
-                prot_decoder_input_r, prot_decoder_output_r,
-                n_eff
-            ) = self.loader.dataset.generate_test_data(self, batch_size, matching=True)  # TODO write generate_test_data
-            if self.run_fr:
-                output_logits_f, output_logits_r = self.model(
-                    prot_decoder_input_f, prot_mask_decoder, prot_decoder_input_r, prot_mask_decoder)
-                output_logits = torch.cat((output_logits_f, output_logits_r), dim=0)
-                target_seqs = torch.cat((prot_decoder_output_f, prot_decoder_output_r), dim=0)
-                mask = torch.cat((prot_mask_decoder, prot_mask_decoder), dim=0)
-            else:
-                output_logits = self.model(prot_decoder_input_f, prot_mask_decoder)
-                target_seqs = prot_decoder_output_f
-                mask = prot_mask_decoder
-
-            cross_entropy = F.cross_entropy(output_logits, target_seqs.argmax(1), reduction='none')
-            cross_entropy = cross_entropy * mask.squeeze(1)
-            reconstruction_per_seq = cross_entropy.sum([1, 2]) / mask.sum([1, 2, 3])
-            reconstruction_loss = reconstruction_per_seq.mean()
-            accuracy_per_seq = target_seqs[output_logits.argmax(1, keepdim=True)].sum([1, 2]) / mask.sum([1, 2, 3])
-            avg_accuracy = accuracy_per_seq.mean()
-        self.model.train()
-        return reconstruction_loss, avg_accuracy
+        # self.model.eval()
+        # with torch.no_grad():
+        #     (
+        #         prot_decoder_input_f, prot_decoder_output_f, prot_mask_decoder,
+        #         prot_decoder_input_r, prot_decoder_output_r,
+        #         n_eff
+        #     ) = self.loader.dataset.generate_test_data(self, batch_size, matching=True)  # TODO write generate_test_data
+        #     if self.run_fr:
+        #         output_logits_f, output_logits_r = self.model(
+        #             prot_decoder_input_f, prot_mask_decoder, prot_decoder_input_r, prot_mask_decoder)
+        #         output_logits = torch.cat((output_logits_f, output_logits_r), dim=0)
+        #         target_seqs = torch.cat((prot_decoder_output_f, prot_decoder_output_r), dim=0)
+        #         mask = torch.cat((prot_mask_decoder, prot_mask_decoder), dim=0)
+        #     else:
+        #         output_logits = self.model(prot_decoder_input_f, prot_mask_decoder)
+        #         target_seqs = prot_decoder_output_f
+        #         mask = prot_mask_decoder
+        #
+        #     cross_entropy = F.cross_entropy(output_logits, target_seqs.argmax(1), reduction='none')
+        #     cross_entropy = cross_entropy * mask.squeeze(1)
+        #     reconstruction_per_seq = cross_entropy.sum([1, 2]) / mask.sum([1, 2, 3])
+        #     reconstruction_loss = reconstruction_per_seq.mean()
+        #     accuracy_per_seq = target_seqs[output_logits.argmax(1, keepdim=True)].sum([1, 2]) / mask.sum([1, 2, 3])
+        #     avg_accuracy = accuracy_per_seq.mean()
+        # self.model.train()
+        # return reconstruction_loss, avg_accuracy
 
     def test(self, data_loader, model_eval=True, num_samples=1, return_logits=False, return_ce=False):
         if model_eval:
@@ -349,7 +349,7 @@ class AutoregressiveTrainer:
             return output
 
     def save_state(self, last_batch=None):
-        snapshot = f"{self.params['snapshot_path']}/{self.params['snapshot_name']}/{self.model.step}.pth"
+        snapshot = f"{self.params['snapshot_path']}/{self.params['snapshot_name']}/{self.params['snapshot_name']}.ckpt-{self.model.step}.pth"
         revive_exec = f"{self.params['snapshot_path']}/revive_executable/{self.params['snapshot_name']}.sh"
         if not os.path.exists(os.path.dirname(snapshot)):
             os.makedirs(os.path.dirname(snapshot), exist_ok=True)

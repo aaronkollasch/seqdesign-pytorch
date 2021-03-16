@@ -7,8 +7,8 @@ import torch.distributions as dist
 import torch.nn.functional as F
 
 import layers
-from utils import recursive_update
-from functions import nonlinearity, comb_losses, clamp
+from seqdesign_pt.utils import recursive_update
+from seqdesign_pt.functions import nonlinearity, comb_losses, clamp
 
 
 class Autoregressive(nn.Module):
@@ -45,7 +45,7 @@ class Autoregressive(nn.Module):
                 "num_dilation_blocks": 6,
                 "num_layers": 9,
                 "dilation_schedule": None,
-                "transformer": False,  # TODO transformer
+                "transformer": False,
                 "inverse_temperature": False,
                 "dropout_loc": "inter",  # options = "final", "inter", "gaussian"
                 "dropout_p": 0.5,  # probability of zeroing out value, not the keep probability
@@ -410,7 +410,7 @@ class AutoregressiveVAE(nn.Module):
                 "transformer": False,
                 "inverse_temperature": False,
                 "positional_embedding": True,
-                "skip_connections": False,  # TODO test effect of skip connections
+                "skip_connections": False,
                 "pos_emb_max_len": 400,
                 "pos_emb_step": 5,
                 "config": "updated",
@@ -477,7 +477,6 @@ class AutoregressiveVAE(nn.Module):
         self.encoder.emb_log_sigma_one = nn.Linear(enc_params['channels'], enc_params['embedding_nnet_size'])
         self.encoder.emb_mu_out = nn.Linear(enc_params['embedding_nnet_size'], enc_params['latent_size'])
         self.encoder.emb_log_sigma_out = nn.Linear(enc_params['embedding_nnet_size'], enc_params['latent_size'])
-        # TODO try adding flow
 
         # initialize decoder modules
         dec_params = self.hyperparams['decoder']
@@ -617,7 +616,7 @@ class AutoregressiveVAE(nn.Module):
         eps = torch.zeros_like(log_sigma).normal_(std=stddev)
         return mu + log_sigma.exp() * eps
 
-    def generate(self, mode=True):  # TODO implement fast generation
+    def generate(self, mode=True):
         for module in self.decoder.dilation_blocks():
             if hasattr(module, "generate") and callable(module.generate):
                 module.generate(mode)
@@ -637,7 +636,7 @@ class AutoregressiveVAE(nn.Module):
         enc_params = self.hyperparams['encoder']
         nonlin = nonlinearity(enc_params['embedding_nnet_nonlinearity'])
 
-        up_val_1d = self.encoder.start_conv(inputs)  # TODO use special input for encoder
+        up_val_1d = self.encoder.start_conv(inputs)
         for convnet in self.encoder.dilation_blocks:
             up_val_1d = convnet(up_val_1d, input_masks)
 
