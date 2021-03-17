@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.distributions as dist
 import torch.nn.functional as F
 
-import layers
+from seqdesign_pt import layers
 from seqdesign_pt.utils import recursive_update
 from seqdesign_pt.functions import nonlinearity, comb_losses, clamp
 
