@@ -48,7 +48,7 @@ This script will run 100 training iterations on the β-Lactamase sequence datase
 The final model checkpoint will appear as three files in
 `sess/BLAT_ECOLX_elu_channels-48_rseed-11_<timestamp>.ckpt-100*`
 
-On an AWS p2.xlarge instance, this demonstration took 6 minutes.
+On an AWS p2.xlarge instance, this demonstration took 2 minutes.
 
 ### Predicting mutation effects
 ```shell script
@@ -65,15 +65,17 @@ The final predictions are the average of 10 predictions
 These predictions will appear in
 `calc_logprobs/output/demo_BLAT_ECOLX_r24-286_Ranganathan2015_rseed-11_channels-48_dropoutp-0.5.csv`
 
-On an AWS p2.xlarge instance, this demonstration took 7 minutes.
+On an AWS p2.xlarge instance, this demonstration took 3.5 minutes.
 
 ### Generating nanobody libraries
 ```shell script
 ./demo_generate.sh
+./demo_generate_fast.sh
 ```
 
 This will generate nanobody CDR3 and FRA4 sequences given a preceding VH sequence.
 The full nanobody sequences will be output in
 `generated/nanobody.ckpt-250000_temp-1.0_rseed-42.fa` 
 
-On an AWS p2.xlarge instance, this demonstration took 2.5 minutes.
+On an AWS p2.xlarge instance, `demo_generate.sh` took 2.5 minutes and 
+`demo_generate_fast.sh` took 30 seconds.
