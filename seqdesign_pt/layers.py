@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
-from functions import normalize, l2_norm_except_dim
+from seqdesign_pt.functions import normalize, l2_norm_except_dim
 
 
 class HyperparameterError(ValueError):

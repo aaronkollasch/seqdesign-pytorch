@@ -16,7 +16,7 @@ from seqdesign_pt.tf_reader import TFReader
 from seqdesign_pt.version import VERSION
 
 
-def main():  # TODO update to pytorch
+def main():
     parser = argparse.ArgumentParser(description="Generate novel sequences sampled from the model.")
     parser.add_argument("--sess", type=str, required=True, help="Session name for restoring a model.")
     parser.add_argument("--checkpoint", type=int, default=None, metavar='CKPT', help="Checkpoint step number.")

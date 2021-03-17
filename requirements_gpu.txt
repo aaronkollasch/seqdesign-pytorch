@@ -3,3 +3,6 @@ scipy
 numpy
 scikit-learn<0.22
 gitpython
+pandas
+biopython
+pillow

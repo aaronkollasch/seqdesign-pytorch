@@ -10,7 +10,7 @@ import torch.distributions as dist
 import torch.utils.data as data
 from Bio.SeqIO.FastaIO import SimpleFastaParser
 
-from utils import temp_seed
+from seqdesign_pt.utils import temp_seed
 
 PROTEIN_ALPHABET = 'ACDEFGHIKLMNPQRSTVWY*'
 PROTEIN_REORDERED_ALPHABET = 'DEKRHNQSTPGAVILMCFYW*'
