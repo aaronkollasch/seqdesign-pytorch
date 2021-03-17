@@ -8,11 +8,11 @@ import json
 import numpy as np
 import torch
 
-import data_loaders
-import autoregressive_model
-import autoregressive_train
-import model_logging
-from utils import get_cuda_version, get_cudnn_version, get_github_head_hash, Tee
+from seqdesign_pt import data_loaders
+from seqdesign_pt import autoregressive_model
+from seqdesign_pt import autoregressive_train
+from seqdesign_pt import model_logging
+from seqdesign_pt.utils import get_cuda_version, get_cudnn_version, get_github_head_hash, Tee
 
 working_dir = '/n/groups/marks/users/aaron/autoregressive'
 data_dir = '/n/groups/marks/projects/autoregressive'
@@ -127,7 +127,7 @@ trainer = autoregressive_train.AutoregressiveVAETrainer(
     model=model,
     data_loader=loader,
     params=trainer_params,
-    snapshot_path=working_dir + '/snapshots',
+    snapshot_path=working_dir + '/sess',
     snapshot_name=run_name,
     snapshot_interval=args.num_iterations // 10,
     snapshot_exec_template=sbatch_executable,
@@ -137,7 +137,7 @@ trainer = autoregressive_train.AutoregressiveVAETrainer(
         log_interval=500,
         validation_interval=1000,
         generate_interval=5000,
-        log_dir=working_dir + '/logs/' + run_name
+        log_dir=working_dir + '/log/' + run_name
     )
 )
 if args.restore is not None:
