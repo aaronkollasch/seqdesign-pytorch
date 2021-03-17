@@ -20,12 +20,13 @@ def main():
     parser = argparse.ArgumentParser(description="Generate novel sequences sampled from the model.")
     parser.add_argument("--sess", type=str, required=True, help="Session name for restoring a model.")
     parser.add_argument("--checkpoint", type=int, default=None, metavar='CKPT', help="Checkpoint step number.")
+    parser.add_argument("--channels", type=int, default=48, metavar='C', help="Number of channels.")
     parser.add_argument("--r-seed", type=int, default=42, help="Random seed.")
     parser.add_argument("--temp", type=float, default=1.0, help="Generation temperature.")
     parser.add_argument("--batch-size", type=int, default=500, help="Number of sequences per generation batch.")
     parser.add_argument("--num-batches", type=int, default=1000000, help="Number of batches to generate.")
     parser.add_argument("--max-steps", type=int, default=50, help="Maximum number of decoding steps per batch.")
-    parser.add_argument("--fast-generation", type=bool, action='store_true', help="Use fast generation mode.")
+    parser.add_argument("--fast-generation", action='store_true', help="Use fast generation mode.")
     parser.add_argument("--input-seq", type=str, default='default', help="Path to file with starting sequence.")
     parser.add_argument("--output-prefix", type=str, default='nanobody', help="Prefix for output fasta file.")
     parser.add_argument("--alphabet-type", type=str, default='protein', metavar='T',  help="Alphabet to use for the dataset.", required=False)
@@ -56,7 +57,7 @@ def main():
         print(utils.get_cuda_version())
         print("CuDNN Version ", utils.get_cudnn_version())
 
-    print("SeqDesign git hash:", str(utils.get_github_head_hash()))
+    print("SeqDesign-PyTorch git hash:", str(utils.get_github_head_hash()))
     print()
 
     aws_util = aws_utils.AWSUtility(s3_project=args.s3_project, s3_base_path=args.s3_path) if args.s3_path else None
@@ -151,9 +152,9 @@ def main():
         start = time.time()
 
         input_seq_list = batch_size * [input_seq]
-        batch = dataset.sequences_to_onehot(input_seq_list)['decoder']
-        seq_in = batch['decoder_input']
-        completion = torch.zeros(batch_size)
+        batch = dataset.sequences_to_onehot(input_seq_list)
+        seq_in = batch['decoder_input'].to(device)
+        completion = torch.zeros(batch_size).to(device)
 
         for step in range(args.max_steps):
             with torch.no_grad():
@@ -166,9 +167,10 @@ def main():
             if (completion > 0).all():
                 break
 
+        batch_seqs = seq_in.argmax(1).squeeze().cpu().numpy()
         with open(output_filename, "a") as output:
             for idx_seq in range(batch_size):
-                batch_seq = input_seq_list[idx_seq]
+                batch_seq = ''.join([dataset.idx_to_aa[idx] for idx in batch_seqs[idx_seq]])
                 out_seq = ""
                 end_seq = False
                 for idx_aa, aa in enumerate(batch_seq):

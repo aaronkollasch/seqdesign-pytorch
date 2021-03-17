@@ -61,7 +61,7 @@ class Logger:
             bitperchar=float(current_losses['bitperchar'].detach()) if 'bitperchar' in current_losses else 0.,
         )
 
-        if current_step % self.log_interval == 0:
+        if current_step % self.log_interval == 0 or current_step < 10:
             self.log_loss(current_step)
             self.log_time = time.time()
             self.load_time = 0.

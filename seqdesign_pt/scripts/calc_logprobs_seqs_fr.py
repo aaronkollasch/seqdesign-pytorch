@@ -60,7 +60,7 @@ def main():
         print(utils.get_cuda_version())
         print("CuDNN Version ", utils.get_cudnn_version())
 
-    print("SeqDesign git hash:", str(utils.get_github_head_hash()))
+    print("SeqDesign-PyTorch git hash:", str(utils.get_github_head_hash()))
     print()
 
     sess_name = args.sess

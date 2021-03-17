@@ -76,4 +76,4 @@ This will generate nanobody CDR3 and FRA4 sequences given a preceding VH sequenc
 The full nanobody sequences will be output in
 `generated/nanobody.ckpt-250000_temp-1.0_rseed-42.fa` 
 
-On an AWS p2.xlarge instance, this demonstration took 6 minutes.
+On an AWS p2.xlarge instance, this demonstration took 2.5 minutes.

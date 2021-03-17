@@ -48,6 +48,10 @@ def main(working_dir='.'):
                         help="Dropout probability (drop rate, not keep rate)")
     parser.add_argument("--alphabet-type", type=str, default='protein', metavar='T',
                         help="Type of data to model. Options = [protein, DNA, RNA]")
+    parser.add_argument("--num-data-workers", type=int, default=0,
+                        help="Number of workers to load data")
+    parser.add_argument("--no-cuda", action='store_true',
+                        help="Disable GPU evaluation")
     args = parser.parse_args()
 
     ########################
@@ -141,7 +145,7 @@ def main(working_dir='.'):
         print(utils.get_cuda_version())
         print("CuDNN Version ", utils.get_cudnn_version())
 
-    print("SeqDesign git hash:", str(utils.get_github_head_hash()))
+    print("SeqDesign-PyTorch git hash:", str(utils.get_github_head_hash()))
     print()
 
     print("Run:", folder_time)
@@ -184,7 +188,7 @@ def main(working_dir='.'):
     # LOAD MODEL #
     ##############
 
-    if args.restore is not None:
+    if args.restore:
         print("Restoring model from:", args.restore)
         checkpoint = torch.load(args.restore, map_location='cpu' if device.type == 'cpu' else None)
         dims = checkpoint['model_dims']
@@ -214,13 +218,13 @@ def main(working_dir='.'):
         # logger=model_logging.Logger(validation_interval=None),
         logger=model_logging.TensorboardLogger(
             log_interval=500,
-            validation_interval=1000,
-            generate_interval=5000,
-            log_dir=working_dir + '/logs/' + folder_time,
+            validation_interval=None,
+            generate_interval=None,
+            log_dir=working_dir + '/log/' + folder_time,
             print_output=True,
         )
     )
-    if args.restore is not None:
+    if args.restore:
         trainer.load_state(checkpoint)
 
     print()
