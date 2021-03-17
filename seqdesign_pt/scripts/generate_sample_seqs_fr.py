@@ -31,7 +31,7 @@ def main():
     parser.add_argument("--output-prefix", type=str, default='nanobody', help="Prefix for output fasta file.")
     parser.add_argument("--alphabet-type", type=str, default='protein', metavar='T',  help="Alphabet to use for the dataset.", required=False)
     parser.add_argument("--s3-path", type=str, default='', help="Base s3:// path (leave blank to disable syncing).")
-    parser.add_argument("--s3-project", type=str, default=VERSION+'-pt', help="Project name (subfolder of s3-path).")
+    parser.add_argument("--s3-project", type=str, default=VERSION, help="Project name (subfolder of s3-path).")
     parser.add_argument("--no-cuda", action='store_true', help="Disable GPU evaluation")
     parser.add_argument("--from-tf", action='store_true', help="Load model from tensorflow checkpoint")
 

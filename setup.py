@@ -7,7 +7,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="seqdesign_pt",
-    version="0.0.1",
+    version="1.0.0",
     author="Aaron Kollasch",
     author_email="awkollasch@gmail.com",
     description="Protein design and variant prediction using autoregressive generative models",

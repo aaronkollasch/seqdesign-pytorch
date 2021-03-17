@@ -24,7 +24,7 @@ def main(working_dir='.'):
     parser = argparse.ArgumentParser(description="Train an autoregressive model on a collection of sequences.")
     parser.add_argument("--s3-path", type=str, default='',
                         help="Base s3:// path (leave blank to disable syncing).")
-    parser.add_argument("--s3-project", type=str, default=VERSION+'-pt', metavar='P',
+    parser.add_argument("--s3-project", type=str, default=VERSION, metavar='P',
                         help="Project name (subfolder of s3-path).")
     parser.add_argument("--run-name-prefix", type=str, default=None, metavar='P',
                         help="Prefix for run name.")
