@@ -78,7 +78,6 @@ def main():
     torch.cuda.manual_seed_all(args.r_seed)
 
     dataset = data_loaders.SequenceDataset(alphabet_type=args.alphabet_type, output_types='decoder', matching=False)
-    alphabet_list = list(dataset.alphabet)
 
     os.makedirs(os.path.join(working_dir, 'generate_sequences', 'generated'), exist_ok=True)
     output_filename = (
@@ -146,7 +145,6 @@ def main():
     model.to(device)
     print("Num parameters:", model.parameter_count())
 
-    model.generate(args.fast_generation)
     model.eval()
     for i in range(num_batches):
         start = time.time()
@@ -158,6 +156,7 @@ def main():
 
         for step in range(args.max_steps):
             with torch.no_grad():
+                model.generate(args.fast_generation)
                 seq_logits = model.forward(seq_in, None)
                 output_logits = seq_logits[:, :, 0, -1] * args.temp
                 output = dist.OneHotCategorical(logits=output_logits).sample()
