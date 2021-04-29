@@ -58,9 +58,10 @@ def main(working_dir='.'):
     # MAKE RUN DESCRIPTORS #
     ########################
 
+    dataset_name = args.dataset.rsplit('/', 1)[-1].rsplit('.', 1)[0]
     if args.restore == '':
         folder_time = (
-            f"{args.dataset}_{args.s3_project}_channels-{args.channels}"
+            f"{dataset_name}_{args.s3_project}_channels-{args.channels}"
             f"_rseed-{args.r_seed}_{time.strftime('%y%b%d_%I%M%p', time.gmtime())}"
         )
         if args.run_name_prefix is not None:
@@ -72,9 +73,6 @@ def main(working_dir='.'):
     folder = f"{working_dir}/sess/{folder_time}"
     os.makedirs(folder, exist_ok=True)
     log_f = utils.Tee(f'{folder}/log.txt', 'a')  # log stdout to log.txt
-
-    if args.dataset.endswith('.fa'):
-        args.dataset = args.dataset[:-3]
 
     if not args.restore:
         restore_args = " \\\n  ".join(sys.argv[1:])
@@ -157,7 +155,10 @@ def main(working_dir='.'):
     aws_util = aws_utils.AWSUtility(s3_base_path=args.s3_path, s3_project=args.s3_project) if args.s3_path else None
     # for now, we will make all the sequences have the same length of
     #   encoded matrices, though this is wasteful
-    filenames = glob.glob(f'{working_dir}/datasets/sequences/{args.dataset}*.fa')
+    if os.path.exists(args.dataset):
+        filenames = [args.dataset]
+    else:
+        filenames = glob.glob(f'{working_dir}/datasets/sequences/{args.dataset}*.fa')
     if not filenames and aws_util is not None:
         if not aws_util.s3_get_file_grep(
                 s3_folder='datasets/sequences',

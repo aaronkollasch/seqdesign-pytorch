@@ -436,7 +436,10 @@ class SingleFamilyDataset(SequenceDataset):
         family_name = ''
         weight_list = []
 
-        f_names = glob.glob(self.working_dir + '/datasets/sequences/' + self.dataset + '*.fa')
+        if os.path.exists(self.dataset):
+            f_names = [self.dataset]
+        else:
+            f_names = glob.glob(f'{self.working_dir}/datasets/sequences/{self.dataset}*.fa')
         if len(f_names) != 1:
             raise AssertionError('Wrong number of families: {}'.format(len(f_names)))
 
@@ -444,15 +447,30 @@ class SingleFamilyDataset(SequenceDataset):
             sequence_list = []
             weight_list = []
 
-            family_name_list = filename.split('/')[-1].split('_')
-            family_name = family_name_list[0] + '_' + family_name_list[1]
-            print(family_name)
+            family_name = filename.rsplit('/', 1)[-1].rsplit('.', 1)[0]
+            family_name_list = family_name.split('_')
+            if len(family_name_list) >= 2:
+                family_name = family_name_list[0] + '_' + family_name_list[1]
+            print(f"Family: {family_name}")
 
             family_size = 0
             ind_family_idx_list = []
             with open(filename, 'r') as fa:
+                # check if first sequence header has a sequence weight
+                line = 'start'
+                for title, seq in SimpleFastaParser(fa):
+                    line = title
+                    break
+                try:
+                    weight = float(line.rsplit(':', 1)[-1])
+                    uniform_weights = False
+                except ValueError:
+                    print(f"No sequence weights detected: {line}\nUsing uniform weights.")
+                    uniform_weights = True
+                fa.seek(0)
+
                 for i, (title, seq) in enumerate(SimpleFastaParser(fa)):
-                    weight = float(title.split(':')[-1])
+                    weight = 1.0 if uniform_weights else float(title.rsplit(':', 1)[-1])
                     valid = True
                     for letter in seq:
                         if letter not in self.aa_dict:
