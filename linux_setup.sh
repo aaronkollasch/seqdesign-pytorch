@@ -21,7 +21,7 @@ wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
 sh Miniconda3-latest-Linux-x86_64.sh -b -p "$HOME"/miniconda3
 rm Miniconda3-latest-Linux-x86_64.sh
 "$HOME"/miniconda3/bin/conda init
-"$HOME"/miniconda3/bin/conda create -n seqdesign -y -c pytorch python=3.7 pytorch "tensorflow-gpu>=1.12,<2" scipy scikit-learn gitpython pandas biopython pillow
+"$HOME"/miniconda3/bin/conda create -n seqdesign -y -c pytorch python=3.7 pytorch "tensorflow-gpu>=1.12,<2" scipy "scikit-learn<0.22" gitpython pandas biopython pillow
 "$HOME"/miniconda3/envs/seqdesign/bin/python -c "import torch; print(torch.cuda.is_available()); print([torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())])"  # test GPU install
 #"$HOME"/miniconda3/envs/seqdesign/bin/python -c "from tensorflow.python.client import device_lib; print(device_lib.list_local_devices())"  # test GPU install
 
