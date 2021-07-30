@@ -22,7 +22,7 @@ parser.add_argument("--channels", type=int, default=48,
                     help="Number of channels.")
 parser.add_argument("--num-iterations", type=int, default=250005,
                     help="Number of iterations to run the model.")
-parser.add_argument("--dataset", type=str, default=None,
+parser.add_argument("--dataset", type=str, default=None, required=True,
                     help="Dataset name for fitting model. Alignment weights must be computed beforehand.")
 parser.add_argument("--num-data-workers", type=int, default=4,
                     help="Number of workers to load data")

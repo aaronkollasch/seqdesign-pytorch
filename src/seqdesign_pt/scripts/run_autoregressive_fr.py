@@ -36,7 +36,7 @@ def main(working_dir='.'):
                         help="Number of iterations to run the model.")
     parser.add_argument("--snapshot-interval", type=int, default=None, metavar='N',
                         help="Take a snapshot every N iterations.")
-    parser.add_argument("--dataset", type=str, default=None,
+    parser.add_argument("--dataset", type=str, default=None, required=True,
                         help="Dataset name for fitting model. Alignment weights must be computed beforehand.")
     parser.add_argument("--restore", type=str, default='',
                         help="Session name for restoring a model to continue training.")
