@@ -1,5 +1,0 @@
-#!/usr/bin/env python3
-from seqdesign_pt.scripts.run_autoregressive_fr import main
-
-if __name__ == "__main__":
-    main()
