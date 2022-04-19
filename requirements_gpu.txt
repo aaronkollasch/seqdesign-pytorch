@@ -1,8 +1,7 @@
 torch
-tensorflow-gpu>=1.12,<2
 scipy
 numpy
-scikit-learn<0.22
+scikit-learn
 gitpython
 pandas
 biopython
