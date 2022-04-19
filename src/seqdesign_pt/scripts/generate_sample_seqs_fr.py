@@ -105,9 +105,9 @@ def main():
             )
         with open(args.input_seq) as f:
             input_seq = f.read()
-        input_seq = "*" + input_seq.strip()
+        input_seq = input_seq.strip()
     else:
-        input_seq = "*EVQLVESGGGLVQAGGSLRLSCAASGFTFSSYAMGWYRQAPGKEREFVAAISWSGGSTYYADSVKGRFTISRDNAKNTVYLQMNSLKPEDTAVYYC"
+        input_seq = "EVQLVESGGGLVQAGGSLRLSCAASGFTFSSYAMGWYRQAPGKEREFVAAISWSGGSTYYADSVKGRFTISRDNAKNTVYLQMNSLKPEDTAVYYC"
 
     if args.checkpoint is None:  # look for old-style flat session file structure
         glob_path = f"{working_dir}/sess/{sess_name}*"
