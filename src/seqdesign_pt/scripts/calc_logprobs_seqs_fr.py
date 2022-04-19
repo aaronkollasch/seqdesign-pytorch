@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-import tensorflow as tf
+try:
+    import tensorflow as tf
+    from seqdesign_pt.tf_reader import TFReader
+except ImportError:
+    TFReader = None
+    class tf:
+        __version__ = None
 import numpy as np
 import pandas as pd
 import argparse
@@ -12,7 +18,6 @@ from seqdesign_pt import autoregressive_train
 from seqdesign_pt import utils
 from seqdesign_pt import aws_utils
 from seqdesign_pt import data_loaders
-from seqdesign_pt.tf_reader import TFReader
 from seqdesign_pt.version import VERSION
 
 
@@ -111,6 +116,9 @@ def main():
 
     print("Initializing and loading variables")
     if args.from_tf:
+        if not TFReader:
+            print("Trying to read tensorflow model but tensorflow could not be imported.")
+            exit(1)
         reader = TFReader(sess_namedir)
         legacy_version = reader.get_checkpoint_legacy_version()
         last_dilation_size = 200 if legacy_version == 0 else 256
