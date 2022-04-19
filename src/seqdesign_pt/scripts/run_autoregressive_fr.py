@@ -58,7 +58,11 @@ def main(working_dir='.'):
     # MAKE RUN DESCRIPTORS #
     ########################
 
-    dataset_name = args.dataset.rsplit('/', 1)[-1].rsplit('.', 1)[0]
+    dataset_name = args.dataset.rsplit('/', 1)[-1]
+    if dataset_name.endswith(".fa"):
+        dataset_name = dataset_name[:-len(".fa")]
+    elif dataset_name.endswith(".fasta"):
+        dataset_name = dataset_name[:-len(".fasta")]
     if args.restore == '':
         folder_time = (
             f"{dataset_name}_{args.s3_project}_channels-{args.channels}"
@@ -158,6 +162,8 @@ def main(working_dir='.'):
     if os.path.exists(args.dataset):
         filenames = [args.dataset]
     else:
+        if args.dataset.endswith(".fa"):
+            args.dataset = args.dataset[:-len(".fa")]
         filenames = glob.glob(f'{working_dir}/datasets/sequences/{args.dataset}*.fa')
     if not filenames and aws_util is not None:
         if not aws_util.s3_get_file_grep(
