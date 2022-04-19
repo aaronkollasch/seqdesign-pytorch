@@ -94,7 +94,11 @@ def main():
         output.write('')
 
     # Provide the starting sequence to use for generation
-    if args.input_seq != 'default':
+    if args.input_seq == 'default':
+        input_seq = "EVQLVESGGGLVQAGGSLRLSCAASGFTFSSYAMGWYRQAPGKEREFVAAISWSGGSTYYADSVKGRFTISRDNAKNTVYLQMNSLKPEDTAVYYC"
+    elif args.input_seq == 'empty':
+        input_seq = ""
+    else:
         if not os.path.exists(args.input_seq) and aws_util:
             if '/' not in args.input_seq:
                 args.input_seq = f'{working_dir}/generate_sequences/input/{args.input_seq}'
@@ -105,9 +109,7 @@ def main():
             )
         with open(args.input_seq) as f:
             input_seq = f.read()
-        input_seq = "*" + input_seq.strip()
-    else:
-        input_seq = "*EVQLVESGGGLVQAGGSLRLSCAASGFTFSSYAMGWYRQAPGKEREFVAAISWSGGSTYYADSVKGRFTISRDNAKNTVYLQMNSLKPEDTAVYYC"
+        input_seq = input_seq.strip()
 
     if args.checkpoint is None:  # look for old-style flat session file structure
         glob_path = f"{working_dir}/sess/{sess_name}*"
