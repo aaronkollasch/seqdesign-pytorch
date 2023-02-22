@@ -6,7 +6,6 @@ from datetime import timedelta
 import sys
 import json
 import glob
-import tensorflow as tf
 import numpy as np
 import torch
 from seqdesign_pt.version import VERSION
@@ -116,7 +115,6 @@ def main(working_dir='.'):
     else:
         r_seed = args.r_seed
 
-    tf.set_random_seed(r_seed)
     np.random.seed(args.r_seed)
     torch.manual_seed(args.r_seed)
     torch.cuda.manual_seed_all(args.r_seed)
@@ -133,7 +131,6 @@ def main(working_dir='.'):
 
     print("OS: ", sys.platform)
     print("Python: ", sys.version)
-    print("TensorFlow: ", tf.__version__)
     print("Numpy: ", np.__version__)
 
     use_cuda = not args.no_cuda
