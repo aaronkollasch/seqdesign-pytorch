@@ -2,7 +2,7 @@ import os
 import sys
 import subprocess
 import glob
-import collections
+from collections.abc import Mapping
 import shutil
 import contextlib
 
@@ -13,7 +13,7 @@ import git
 def recursive_update(orig_dict, update_dict):
     """Update the contents of orig_dict with update_dict"""
     for key, val in update_dict.items():
-        if isinstance(val, collections.Mapping):
+        if isinstance(val, Mapping):
             orig_dict[key] = recursive_update(orig_dict.get(key, {}), val)
         else:
             orig_dict[key] = val
