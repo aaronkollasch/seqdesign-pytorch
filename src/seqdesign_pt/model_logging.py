@@ -3,10 +3,10 @@ import threading
 from io import BytesIO
 import time
 
-import tensorflow as tf
 import numpy as np
 from PIL import Image
 import torch
+from torch.utils.tensorboard import SummaryWriter
 
 
 class Accumulator:
@@ -123,7 +123,7 @@ class TensorboardLogger(Logger):
                  ):
         super().__init__(
             log_interval, validation_interval, generate_interval, info_interval, trainer, generate_function)
-        self.writer = tf.summary.FileWriter(log_dir)
+        self.writer = SummaryWriter(log_dir)
         self.log_param_histograms = log_param_histograms
         self.log_image_summaries = log_image_summaries
         self.print_output = print_output
@@ -173,8 +173,7 @@ class TensorboardLogger(Logger):
         """Log a scalar variable."""
         if isinstance(value, torch.Tensor):
             value = value.item()  # value must have 1 element only
-        summary = tf.Summary(value=[tf.Summary.Value(tag=tag, simple_value=value)])
-        self.writer.add_summary(summary, step)
+        self.writer.add_scalar(tag, value, global_step=step)
 
     def image_summary(self, tag, images, step, max_outputs=3):
         """Log a tensor image.
@@ -184,57 +183,10 @@ class TensorboardLogger(Logger):
         :param max_outputs: max N images to save
         """
 
-        img_summaries = []
-        for i in range(min(images.size(0), max_outputs)):
-            img = images[i].cpu().numpy()
-
-            # Write the image to a string
-            s = BytesIO()
-            Image.fromarray(img, 'RGB').save(s, format="png")
-            # scipy.misc.toimage(img).save(s, format="png")
-
-            # Create an Image object
-            img_sum = tf.Summary.Image(encoded_image_string=s.getvalue(),
-                                       height=img.shape[0],
-                                       width=img.shape[1])
-            # Create a Summary value
-            img_summaries.append(tf.Summary.Value(tag='%s/%d' % (tag, i), image=img_sum))
-
-        # Create and write Summary
-        summary = tf.Summary(value=img_summaries)
-        self.writer.add_summary(summary, step)
+        images = images[:max_outputs]
+        format = "NHW" if images.dim() == 3 else "NHWC"
+        self.writer.add_images(tag, images, global_step=step, dataformats=format)
 
     def histo_summary(self, tag, values, step, bins=200):
         """Log a histogram of the tensor of values."""
-        values = values.cpu().numpy()
-
-        # Create a histogram using numpy
-        counts, bin_edges = np.histogram(values, bins=bins)
-
-        # Fill the fields of the histogram proto
-        hist = tf.HistogramProto()
-        hist.min = float(np.min(values))
-        hist.max = float(np.max(values))
-        hist.num = int(np.prod(values.shape))
-        hist.sum = float(np.sum(values))
-        hist.sum_squares = float(np.sum(values ** 2))
-
-        # Drop the start of the first bin
-        bin_edges = bin_edges[1:]
-
-        # Add bin edges and counts
-        for edge in bin_edges:
-            hist.bucket_limit.append(edge)
-        for c in counts:
-            hist.bucket.append(c)
-
-        # Create and write Summary
-        summary = tf.Summary(value=[tf.Summary.Value(tag=tag, histo=hist)])
-        self.writer.add_summary(summary, step)
-        self.writer.flush()
-
-    def tensor_summary(self, tag, tensor, step):
-        tf_tensor = tf.Variable(tensor).to_proto()
-        summary = tf.Summary(value=[tf.Summary.Value(tag=tag, tensor=tf_tensor)])
-        # summary = tf.summary.tensor_summary(name=tag, tensor=tensor)
-        self.writer.add_summary(summary, step)
+        self.writer.add_histogram(tag, values, global_step=step, bins=bins)
